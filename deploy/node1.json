@@ -1,0 +1,15 @@
+{
+  "node": "dnxroute1",
+  "routers": [
+    { "name": "core", "depth": 0,
+      "entries": { "0x0000000100000000": "dom-dnxroute", "0x0000000200000000": "gov-core" } },
+    { "name": "dnxroute-gw", "depth": 1,
+      "entries": { "0x0000000000001001": "sub-dnx" } }
+  ],
+  "hops": {
+    "dom-dnxroute": ":localnext",
+    "gov-core": ":deliver",
+    "sub-dnx": "134.122.7.99:4500"
+  },
+  "firsthop": "core"
+}

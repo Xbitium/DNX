@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DNX Live Routing — a packet routed by name across two servers</title>
+<meta name="description" content="Live proof of concept: a packet routed across two internet servers purely by its 256-bit name-derived address. Watch each router match one 64-bit field.">
+<link rel="canonical" href="https://routing.dnxroute.com/">
+<meta name="theme-color" content="#0A0E12">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   DNX LIVE ROUTING — "network analyzer" aesthetic
+   Not the marketing site's paper look; this is an instrument.
+   Deep instrument-panel background, phosphor signal green,
+   amber for the moving packet, hairline grid like a scope.
+   ============================================================ */
+:root{
+  --panel:#0A0E12;         /* instrument black-blue */
+  --panel-2:#111820;       /* raised panel */
+  --grid:#1A2530;          /* scope grid lines */
+  --ink:#DDE6E9;           /* readout text */
+  --dim:#5F7481;           /* muted labels */
+  --signal:#3DF5A0;        /* phosphor green — matched/live */
+  --packet:#FFB13D;        /* amber — the moving packet */
+  --wire:#2A3B47;          /* idle link */
+  --alert:#FF5C5C;         /* drop */
+  --assigned:#3DF5A0;      /* registry-assigned field */
+  --hashed:#8FA6FF;        /* hash-derived field */
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{
+  background:
+    linear-gradient(var(--grid) 1px, transparent 1px) 0 0 / 100% 32px,
+    linear-gradient(90deg, var(--grid) 1px, transparent 1px) 0 0 / 32px 100%,
+    var(--panel);
+  background-blend-mode:normal;
+  color:var(--ink);
+  font-family:'Space Grotesk',system-ui,sans-serif;
+  min-height:100vh;
+  -webkit-font-smoothing:antialiased;
+}
+.mono{font-family:'JetBrains Mono',monospace}
+.wrap{max-width:1080px;margin:0 auto;padding:0 24px}
+
+/* header */
+header{border-bottom:1px solid var(--grid);padding:20px 0}
+header .wrap{display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px}
+.brand{font-weight:700;font-size:19px;letter-spacing:-0.01em}
+.brand .live{color:var(--signal)}
+.brand-sub{font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--dim)}
+.status-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--dim);margin-right:6px;vertical-align:middle}
+.status-dot.up{background:var(--signal);box-shadow:0 0 8px var(--signal)}
+
+h1{font-size:clamp(26px,4vw,40px);font-weight:700;letter-spacing:-0.02em;line-height:1.1;margin:40px 0 12px}
+h1 .amber{color:var(--packet)}
+.lede{max-width:640px;color:var(--dim);font-size:17px;margin-bottom:8px}
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <span class="brand">DNX <span class="live">● LIVE</span> ROUTING</span>
+    <span class="brand-sub"><span id="netdot" class="status-dot"></span><span id="netstatus">connecting to nodes…</span></span>
+  </div>
+</header>
+<main class="wrap">
+  <h1>Watch a packet route by <span class="amber">name</span>, across two real servers.</h1>
+  <p class="lede">No IP was typed. This packet carries a 256-bit address derived from its name. Each router reads exactly one 64-bit field, then forwards. The two servers are in different datacenters; the packet crosses the open internet between them.</p>
+
+  <!-- control -->
+  <section style="margin:32px 0 24px">
+    <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+      <label class="mono" style="color:var(--dim);font-size:13px">destination name</label>
+      <select id="dest" class="mono" style="background:var(--panel-2);color:var(--ink);border:1px solid var(--wire);padding:10px 14px;font-size:14px;border-radius:6px">
+        <option value="host1.dnx.dnxroute.com">host1.dnx.dnxroute.com</option>
+        <option value="host2.dnx.dnxroute.com">host2.dnx.dnxroute.com</option>
+        <option value="host1.bad.dnxroute.com (unroutable)">host1.bad.dnxroute.com (unroutable) (unroutable)</option>
+      </select>
+      <button id="send" class="mono" style="background:var(--packet);color:#1A1200;border:none;padding:11px 22px;font-size:14px;font-weight:700;border-radius:6px;cursor:pointer">▶ SEND PACKET</button>
+    </div>
+  </section>
+
+  <!-- the address readout: name dissolving into 256 bits -->
+  <section style="background:var(--panel-2);border:1px solid var(--grid);border-radius:10px;padding:22px;margin-bottom:24px">
+    <div class="mono" style="font-size:11px;letter-spacing:.14em;color:var(--dim);text-transform:uppercase;margin-bottom:14px">256-bit DNX address</div>
+    <div id="addrRow" style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px">
+      <!-- four fields injected by JS -->
+    </div>
+    <div class="mono" style="font-size:12px;color:var(--dim);margin-top:14px;display:flex;gap:20px;flex-wrap:wrap">
+      <span><span style="color:var(--assigned)">●</span> registry-assigned (aggregatable)</span>
+      <span><span style="color:var(--hashed)">●</span> hash-derived (self-service)</span>
+    </div>
+  </section>
+
+  <!-- the topology / packet path -->
+  <section style="margin-bottom:24px">
+    <div class="mono" style="font-size:11px;letter-spacing:.14em;color:var(--dim);text-transform:uppercase;margin-bottom:14px">forwarding path — 4 routers across 2 datacenters</div>
+    <div id="topo" style="position:relative;background:var(--panel-2);border:1px solid var(--grid);border-radius:10px;padding:28px 20px;overflow-x:auto">
+      <svg id="pathSvg" viewBox="0 0 900 220" style="width:100%;min-width:720px;height:auto"></svg>
+    </div>
+  </section>
+
+  <!-- live telemetry log -->
+  <section style="margin-bottom:48px">
+    <div class="mono" style="font-size:11px;letter-spacing:.14em;color:var(--dim);text-transform:uppercase;margin-bottom:14px">live telemetry <span id="hopcount" style="color:var(--signal)"></span></div>
+    <div id="log" class="mono" style="background:#060A0D;border:1px solid var(--grid);border-radius:10px;padding:18px;font-size:13px;line-height:1.9;min-height:120px;max-height:340px;overflow-y:auto;color:var(--dim)"></div>
+  </section>
+</main>
+
+<footer style="border-top:1px solid var(--grid);padding:24px 0">
+  <div class="wrap mono" style="font-size:12px;color:var(--dim);display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px">
+    <span>DNX experimental · routing.dnxroute.com</span>
+    <span><a href="https://dnxroute.com/protocol.html" style="color:var(--signal)">protocol spec</a> · <a href="https://dnxroute.com/" style="color:var(--signal)">dnxroute.com</a></span>
+  </div>
+</footer>
+<script>
+// ============================================================
+// DNX Live Routing dashboard
+// Talks to the two real router daemons' telemetry APIs and
+// animates the actual forwarding events they report.
+// ============================================================
+
+// The two nodes and their telemetry endpoints (served over the site's
+// reverse proxy so they're same-origin HTTPS; see nginx config).
+const NODE1 = "/rt/node1";   // dnxroute1: core + domain routers, also the injector
+const NODE2 = "/rt/node2";   // dnxroute2: subdomain + host routers
+
+// The 4 routers in path order, with which node hosts them and the field each reads.
+const PATH = [
+  {id:"core",       node:1, label:"core",        field:"TLD",       kind:"assigned"},
+  {id:"dnxroute-gw",node:1, label:"dnxroute-gw", field:"domain",    kind:"assigned"},
+  {id:"dnx-rtr",   node:2, label:"dnx-rtr",    field:"subdomain", kind:"hashed"},
+  {id:"leaf-sw",    node:2, label:"leaf-sw",     field:"host",      kind:"hashed"},
+];
+
+// ---- draw the forwarding path as an SVG scope trace ----
+const svg = document.getElementById('pathSvg');
+const NS = "http://www.w3.org/2000/svg";
+function el(tag, attrs){ const e=document.createElementNS(NS,tag); for(const k in attrs) e.setAttribute(k,attrs[k]); return e; }
+
+const NODE_X = {1:[120,300], 2:[600,780]}; // x positions of the 2 routers per node
+function routerXY(i){
+  const r = PATH[i];
+  const xs = NODE_X[r.node];
+  const idxInNode = PATH.filter((p,j)=>p.node===r.node && j<i).length;
+  return [xs[idxInNode], 130];
+}
+
+function drawPath(){
+  svg.innerHTML="";
+  // datacenter zones
+  svg.appendChild(el('rect',{x:40,y:40,width:340,height:150,rx:10,fill:'none',stroke:'var(--grid)','stroke-dasharray':'4 4'}));
+  svg.appendChild(el('rect',{x:520,y:40,width:340,height:150,rx:10,fill:'none',stroke:'var(--grid)','stroke-dasharray':'4 4'}));
+  const t1=el('text',{x:50,y:60,fill:'var(--dim)','font-size':'11','font-family':'JetBrains Mono'}); t1.textContent='dnxroute1 · 142.93.177.59'; svg.appendChild(t1);
+  const t2=el('text',{x:530,y:60,fill:'var(--dim)','font-size':'11','font-family':'JetBrains Mono'}); t2.textContent='dnxroute2 · 134.122.7.99'; svg.appendChild(t2);
+  // the cross-internet link label
+  const ci=el('text',{x:450,y:120,fill:'var(--dim)','font-size':'10','font-family':'JetBrains Mono','text-anchor':'middle'}); ci.textContent='open internet'; svg.appendChild(ci);
+
+  // links
+  for(let i=0;i<PATH.length-1;i++){
+    const [x1,y1]=routerXY(i), [x2,y2]=routerXY(i+1);
+    const cross = PATH[i].node!==PATH[i+1].node;
+    svg.appendChild(el('line',{id:'link'+i,x1:x1+46,y1,x2:x2-46,y2,stroke:'var(--wire)','stroke-width':cross?3:2,'stroke-dasharray':cross?'6 4':'0'}));
+  }
+  // router nodes
+  PATH.forEach((r,i)=>{
+    const [x,y]=routerXY(i);
+    const g=el('g',{id:'r'+i});
+    g.appendChild(el('circle',{cx:x,cy:y,r:34,fill:'var(--panel)',stroke:'var(--wire)','stroke-width':2}));
+    const nm=el('text',{x,y:y-2,fill:'var(--ink)','font-size':'12','font-weight':'700','text-anchor':'middle','font-family':'JetBrains Mono'}); nm.textContent=r.label; g.appendChild(nm);
+    const fl=el('text',{x,y:y+14,fill:r.kind==='assigned'?'var(--assigned)':'var(--hashed)','font-size':'10','text-anchor':'middle','font-family':'JetBrains Mono'}); fl.textContent=r.field; g.appendChild(fl);
+    svg.appendChild(g);
+  });
+}
+drawPath();
+
+// ---- reset visual state ----
+function resetPath(){
+  PATH.forEach((r,i)=>{
+    const g=document.getElementById('r'+i);
+    g.querySelector('circle').setAttribute('stroke','var(--wire)');
+    g.querySelector('circle').setAttribute('fill','var(--panel)');
+    const lk=document.getElementById('link'+i); if(lk) lk.setAttribute('stroke','var(--wire)');
+  });
+}
+function lightRouter(i,drop){
+  const g=document.getElementById('r'+i); if(!g)return;
+  const c=g.querySelector('circle');
+  c.setAttribute('stroke', drop?'var(--alert)':'var(--signal)');
+  c.setAttribute('fill', drop?'rgba(255,92,92,.15)':'rgba(61,245,160,.15)');
+  if(i>0){ const lk=document.getElementById('link'+(i-1)); if(lk) lk.setAttribute('stroke','var(--packet)'); }
+}
+
+// ---- address readout ----
+function showAddress(hex){
+  // hex = "TLD:domain:sub:host" 16-hex each
+  const parts = hex.split(':');
+  const names=['TLD','domain','subdomain','host'];
+  const kinds=['assigned','assigned','hashed','hashed'];
+  const row=document.getElementById('addrRow'); row.innerHTML='';
+  parts.forEach((p,i)=>{
+    const col=(kinds[i]==='assigned')?'var(--assigned)':'var(--hashed)';
+    const d=document.createElement('div');
+    d.style.cssText='background:var(--panel);border:1px solid var(--grid);border-radius:6px;padding:12px';
+    d.innerHTML='<div class="mono" style="font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.1em;margin-bottom:6px">'+names[i]+'</div>'+
+      '<div class="mono" style="font-size:13px;color:'+col+';word-break:break-all">0x'+p+'</div>';
+    row.appendChild(d);
+  });
+}
+
+// ---- log ----
+const logEl=document.getElementById('log');
+function logLine(html,color){
+  const d=document.createElement('div');
+  d.innerHTML=html; if(color)d.style.color=color;
+  logEl.appendChild(d); logEl.scrollTop=logEl.scrollHeight;
+}
+function clearLog(){ logEl.innerHTML=''; document.getElementById('hopcount').textContent=''; }
+
+// ---- health check both nodes ----
+async function health(){
+  let up=0;
+  for(const base of [NODE1,NODE2]){
+    try{ const r=await fetch(base+'/topology',{cache:'no-store'}); if(r.ok)up++; }catch(e){}
+  }
+  const dot=document.getElementById('netdot'), st=document.getElementById('netstatus');
+  if(up===2){ dot.classList.add('up'); st.textContent='2/2 nodes online'; }
+  else{ dot.classList.remove('up'); st.textContent=up+'/2 nodes online'; }
+}
+health(); setInterval(health,5000);
+
+// ---- the main event: send a packet and stream real telemetry ----
+let polling=false;
+async function sendPacket(){
+  if(polling) return;
+  const name=document.getElementById('dest').value;
+  resetPath(); clearLog();
+  const since=Date.now()-500;
+  logLine('▶ injecting <span style="color:var(--packet)">'+name+'</span> at dnxroute1 (core)…','var(--ink)');
+
+  let resp;
+  try{
+    resp=await fetch(NODE1+'/inject',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
+  }catch(e){ logLine('✗ could not reach node1 injector: '+e.message,'var(--alert)'); return; }
+  const data=await resp.json();
+  if(data.error){ logLine('✗ '+data.error,'var(--alert)'); showAddress('0000000000000000:0000000000000000:0000000000000000:0000000000000000'); return; }
+  showAddress(data.address);
+  logLine('  resolved → <span class="mono" style="color:var(--dim)">'+data.address+'</span>');
+
+  // poll both nodes for events after `since`, ordered by ts, animate.
+  polling=true;
+  let seen=new Set(); let hops=0; let delivered=false, dropped=false;
+  const started=Date.now();
+  const routerIndex={'core':0,'dnxroute-gw':1,'dnx-rtr':2,'leaf-sw':3};
+
+  const timer=setInterval(async()=>{
+    let all=[];
+    for(const base of [NODE1,NODE2]){
+      try{ const r=await fetch(base+'/events?since='+since,{cache:'no-store'}); const j=await r.json(); (j.events||[]).forEach(e=>all.push(e)); }catch(e){}
+    }
+    all.sort((a,b)=>a.ts-b.ts);
+    for(const e of all){
+      const key=e.ts+e.node+e.router+e.action+e.value;
+      if(seen.has(key))continue; seen.add(key);
+      if(e.action==='inject')continue;
+      const i=routerIndex[e.router];
+      if(e.action==='forward'){
+        hops++; lightRouter(i,false);
+        logLine('  ['+e.node+'] <span style="color:var(--signal)">'+e.router+'</span> matched '+e.field+' <span class="mono">'+e.value+'</span> → '+e.next_hop);
+      }else if(e.action==='deliver'){
+        hops++; lightRouter(i,false); delivered=true;
+        logLine('  ['+e.node+'] <span style="color:var(--signal)">'+e.router+'</span> matched '+e.field+' → <span style="color:var(--signal);font-weight:700">DELIVERED</span>');
+      }else if(e.action==='drop'){
+        lightRouter(i,true); dropped=true;
+        logLine('  ['+e.node+'] <span style="color:var(--alert)">'+e.router+'</span> '+e.detail,'var(--alert)');
+      }
+    }
+    document.getElementById('hopcount').textContent='· '+hops+' hops';
+    if(delivered||dropped||Date.now()-started>4000){
+      clearInterval(timer); polling=false;
+      if(delivered) logLine('✓ packet routed by name across 2 datacenters, '+hops+' hops. Payload stayed sealed the whole way.','var(--signal)');
+      else if(dropped) logLine('■ packet dropped — no route for that name. No loop, clean stop.','var(--alert)');
+    }
+  },250);
+}
+document.getElementById('send').addEventListener('click',sendPacket);
+// draw an initial address preview
+showAddress('0000000100000000:0000000000001001:27753dd64fccf1c0:c0365b5a3867cc38');
+</script>
+</body>
+</html>
