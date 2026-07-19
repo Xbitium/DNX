@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DNX Protocol Specification v0.1</title>
+  <meta name="description" content="DNX protocol specification: architecture, identity model, packet flow, registration, NAT traversal, and roadmap." />
+  <meta name="theme-color" content="#0f5f68" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css" />
+  <style>
+    main{padding:42px 0 72px}.doc{max-width:900px;margin:0 auto;padding:0 24px}.doc h1{font-family:'Archivo',sans-serif;font-size:clamp(2.2rem,5vw,3.6rem);line-height:1.04;letter-spacing:-.03em;margin:10px 0 12px}.doc h2{margin-top:44px;font-family:'Archivo',sans-serif;font-size:1.65rem}.doc h3{font-family:'Archivo',sans-serif;font-size:1.15rem}.doc p,.doc li{color:var(--muted);font-size:1.02rem;line-height:1.75}.doc code{font-family:'IBM Plex Mono',monospace;background:var(--panel);border:1px solid var(--border);padding:1px 6px}.callout{border-left:4px solid var(--accent);background:var(--panel);padding:16px 18px;margin:18px 0 24px;border:1px solid var(--border)}pre{background:#0c1614;color:#9fe8c2;padding:18px;border:1px solid #1e2e29;overflow:auto}.meta{font-family:'IBM Plex Mono',monospace;font-size:.85rem;color:var(--accent);text-transform:uppercase;letter-spacing:.14em}</style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="wrap topbar-inner">
+      <div>
+        <div class="kicker">DNX</div>
+        <div class="muted">Protocol Specification</div>
+      </div>
+      <nav class="nav">
+        <a href="index.html">Home</a>
+        <a href="#overview">Overview</a>
+        <a href="#architecture">Architecture</a>
+        <a href="#security">Security</a>
+        <a href="#roadmap">Roadmap</a>
+      </nav>
+    </div>
+  </header>
+  <main>
+    <div class="doc">
+      <p class="meta">Working draft · v0.1</p>
+      <h1>DNX Protocol Specification</h1>
+      <p>DNX is an experimental identity-native overlay protocol. It explores whether names can become the network interface humans and applications interact with, while existing Internet transport carries the packets underneath.</p>
+
+      <section id="overview">
+        <h2>1. Overview</h2>
+        <p>Traditional networking separates naming, routing, and identity. DNX combines those concerns around a cryptographically bound namespace. A machine registers a human-readable name, binds that name to a keypair, and uses the resulting identity to rendezvous with other nodes.</p>
+        <div class="callout">DNX v0.1 is an overlay. It runs over existing IP networks and does not require new routers or a new physical network.</div>
+      </section>
+
+      <section id="architecture">
+        <h2>2. Architecture</h2>
+        <h3>Components</h3>
+        <ul>
+          <li><strong>Registry</strong> — maintains live name bindings and coordinates rendezvous.</li>
+          <li><strong>Node agent</strong> — holds the identity key and handles heartbeats and peer traffic.</li>
+          <li><strong>CLI</strong> — exposes local controls for registration, ping, and diagnostics.</li>
+        </ul>
+        <h3>Flow</h3>
+        <pre>node → registry: REGISTER
+node → registry: RESOLVE
+registry → peer: INTRO / PUNCH
+peer ↔ peer: PING / PONG</pre>
+      </section>
+
+      <section id="identity">
+        <h2>3. Identity model</h2>
+        <p>Every node generates a keypair. The public key is associated with a name in the registry. The private key never leaves the node. A verified response proves that the machine reached the owner of the name, not just any machine at an address.</p>
+      </section>
+
+      <section id="security">
+        <h2>4. Security</h2>
+        <p>DNX authenticates nodes with signatures and timestamps. v0.1 is explicit about its limits: payload confidentiality is not yet provided, registry responses need hardening, and symmetric NAT remains a future improvement area.</p>
+      </section>
+
+      <section id="roadmap">
+        <h2>5. Roadmap</h2>
+        <ul>
+          <li>v0.2 — signed registry responses and encrypted channels</li>
+          <li>v0.3 — relays for hard NAT scenarios and federation</li>
+          <li>v1.0 — compact binary framing and broader tooling</li>
+        </ul>
+      </section>
+    </div>
+  </main>
+</body>
+</html>
