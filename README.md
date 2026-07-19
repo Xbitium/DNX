@@ -103,8 +103,9 @@ go build -o dnx ./cmd/dnx
 
 ## License
 
-Not yet finalized — see the repository's LICENSE file once added, or open an
-issue if you're evaluating this for a project and need clarity sooner.
+Apache License 2.0 — see [LICENSE](LICENSE). Chosen deliberately: permissive,
+plus an explicit patent grant, which matters for a networking protocol aimed
+at institutional adoption.
 
 ## Contributing
 
