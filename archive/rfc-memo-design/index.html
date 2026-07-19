@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DNX — The name is the address</title>
+<meta name="description" content="DNX is an experimental internet protocol where fully-qualified domain names replace IP addresses. No visible IPs, no NAT configuration, cryptographically verified identity per name.">
+<link rel="canonical" href="https://dnxroute.com/">
+<meta name="theme-color" content="#12616B">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="DNX — Domain Native eXchange">
+<meta property="og:title" content="DNX — The name is the address">
+<meta property="og:description" content="An experimental internet protocol where domain names replace IP addresses: no visible IPs, no NAT configuration, cryptographic identity per name. Live demo with real packets.">
+<meta property="og:url" content="https://dnxroute.com/">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="DNX — The name is the address">
+<meta name="twitter:description" content="An experimental protocol replacing visible IP addressing with cryptographically-bound domain names. Working code, live registry, honest spec.">
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"WebSite","name":"DNX — Domain Native eXchange","alternateName":"DNX Protocol","url":"https://dnxroute.com/","description":"An experimental internet protocol where fully-qualified domain names replace IP addresses, with cryptographic identity native to the address layer."}
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;850&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   DNX design tokens — "RFC memo meets modern type"
+   paper: cool gray-green white (NOT warm cream)
+   ink:   near-black with green undertone
+   petrol: primary accent (network-diagram ink)
+   punch: annotation red — used ONLY for the IP strikethrough + markers
+   phosphor: terminal text on deep terminal ink
+   ============================================================ */
+:root{
+  --paper:#F2F4F3;
+  --paper-raised:#FAFBFA;
+  --ink:#10201B;
+  --ink-soft:#40544D;
+  --petrol:#12616B;
+  --punch:#E8402A;
+  --term-bg:#0C1614;
+  --term-line:#1E2E29;
+  --phosphor:#9FE8C2;
+  --phosphor-dim:#5E8F79;
+  --rule:#D4DAD7;
+  --max:1080px;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  background:var(--paper);
+  color:var(--ink);
+  font-family:'IBM Plex Sans',system-ui,sans-serif;
+  font-size:17px;
+  line-height:1.65;
+  -webkit-font-smoothing:antialiased;
+}
+::selection{background:var(--petrol);color:var(--paper)}
+a{color:var(--petrol)}
+.wrap{max-width:var(--max);margin:0 auto;padding:0 24px}
+.mono{font-family:'IBM Plex Mono',monospace}
+
+/* ---- RFC memo header: the framing device ---- */
+.memo{
+  border-bottom:2px solid var(--ink);
+  padding:18px 0 14px;
+  font-family:'IBM Plex Mono',monospace;
+  font-size:12.5px;
+  letter-spacing:.02em;
+  color:var(--ink-soft);
+}
+.memo .wrap{display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px 24px}
+.memo b{color:var(--ink);font-weight:600}
+
+/* ---- Hero: the typographic thesis ---- */
+.hero{padding:88px 0 64px}
+.hero h1{
+  font-family:'Archivo',sans-serif;
+  font-weight:850;
+  font-size:clamp(40px,7.2vw,92px);
+  line-height:1.02;
+  letter-spacing:-0.028em;
+}
+.was{
+  position:relative;
+  color:var(--ink-soft);
+  white-space:nowrap;
+}
+/* the annotation-red strikethrough — the one place punch red gets to shout */
+.was::after{
+  content:"";
+  position:absolute;left:-1%;right:-1%;top:54%;
+  height:.075em;background:var(--punch);
+  transform:rotate(-1.6deg);
+  transform-origin:center;
+}
+.now{color:var(--petrol)}
+.hero .sub{
+  margin-top:30px;max-width:640px;
+  font-size:20px;color:var(--ink-soft);
+}
+.hero .sub b{color:var(--ink);font-weight:600}
+.cta-row{margin-top:36px;display:flex;gap:14px;flex-wrap:wrap}
+.btn{
+  display:inline-block;padding:13px 24px;
+  font-family:'IBM Plex Mono',monospace;font-size:14.5px;font-weight:600;
+  text-decoration:none;border:2px solid var(--ink);
+  transition:transform .12s ease, box-shadow .12s ease;
+}
+.btn:focus-visible{outline:3px solid var(--petrol);outline-offset:2px}
+.btn-solid{background:var(--ink);color:var(--paper)}
+.btn-ghost{background:transparent;color:var(--ink)}
+.btn:hover{transform:translate(-2px,-2px);box-shadow:4px 4px 0 var(--petrol)}
+</style>
+<style>
+/* ---- Section scaffolding: memo-style eyebrows ---- */
+section{padding:64px 0;border-top:1px solid var(--rule)}
+.eyebrow{
+  font-family:'IBM Plex Mono',monospace;
+  font-size:12.5px;font-weight:600;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--petrol);
+  margin-bottom:14px;
+}
+h2{
+  font-family:'Archivo',sans-serif;font-weight:850;
+  font-size:clamp(28px,4vw,44px);letter-spacing:-0.02em;line-height:1.1;
+  margin-bottom:18px;
+}
+.lede{max-width:680px;font-size:18.5px;color:var(--ink-soft);margin-bottom:36px}
+.lede b{color:var(--ink)}
+
+/* ---- The terminal: signature element ---- */
+.terminal{
+  background:var(--term-bg);
+  border:1px solid var(--term-line);
+  border-radius:10px;
+  overflow:hidden;
+  box-shadow:0 24px 60px -30px rgba(16,32,27,.45);
+}
+.term-bar{
+  display:flex;align-items:center;gap:8px;
+  padding:12px 16px;border-bottom:1px solid var(--term-line);
+}
+.dot{width:11px;height:11px;border-radius:50%;background:var(--term-line)}
+.term-title{
+  margin-left:8px;font-family:'IBM Plex Mono',monospace;
+  font-size:12px;color:var(--phosphor-dim);
+}
+.term-body{
+  padding:22px 22px 26px;
+  font-family:'IBM Plex Mono',monospace;
+  font-size:14.5px;line-height:1.85;
+  color:var(--phosphor);
+  min-height:265px;
+  white-space:pre-wrap;word-break:break-word;
+}
+.term-body .dim{color:var(--phosphor-dim)}
+.term-body .ok{color:#DFFBEC;font-weight:600}
+.term-body .note{color:var(--phosphor-dim);font-style:italic}
+.cursor{
+  display:inline-block;width:.6em;height:1.15em;
+  background:var(--phosphor);vertical-align:text-bottom;
+  animation:blink 1s steps(1) infinite;
+}
+@keyframes blink{50%{opacity:0}}
+.term-caption{
+  margin-top:14px;font-family:'IBM Plex Mono',monospace;
+  font-size:13px;color:var(--ink-soft);
+}
+.term-caption b{color:var(--punch);font-weight:600}
+
+/* ---- How it works: a real sequence, so numbers are earned ---- */
+.steps{display:grid;grid-template-columns:repeat(3,1fr);gap:28px}
+.step{background:var(--paper-raised);border:1px solid var(--rule);padding:26px 24px}
+.step .n{
+  font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;
+  color:var(--punch);margin-bottom:12px;display:block;
+}
+.step h3{font-family:'Archivo',sans-serif;font-weight:700;font-size:19px;margin-bottom:10px}
+.step p{font-size:15.5px;color:var(--ink-soft)}
+.step code{
+  font-family:'IBM Plex Mono',monospace;font-size:13.5px;
+  background:var(--paper);border:1px solid var(--rule);
+  padding:1px 6px;color:var(--petrol);
+}
+
+/* ---- Birth certificate: the registry log ---- */
+.logbox{
+  background:var(--paper-raised);border:1px solid var(--rule);
+  border-left:4px solid var(--petrol);
+  padding:24px 26px;
+  font-family:'IBM Plex Mono',monospace;font-size:13.5px;line-height:2;
+  color:var(--ink-soft);overflow-x:auto;
+}
+.logbox b{color:var(--ink);font-weight:600}
+.logbox .hl{color:var(--petrol);font-weight:600}
+
+/* ---- Comparison table: old world / DNX ---- */
+table{width:100%;border-collapse:collapse;font-size:15.5px}
+th{
+  font-family:'IBM Plex Mono',monospace;font-size:12.5px;font-weight:600;
+  letter-spacing:.12em;text-transform:uppercase;text-align:left;
+  padding:12px 16px;border-bottom:2px solid var(--ink);
+}
+th:last-child{color:var(--petrol)}
+td{padding:14px 16px;border-bottom:1px solid var(--rule);vertical-align:top}
+td:first-child{color:var(--ink-soft)}
+td:last-child{font-weight:500}
+td .mono{font-size:13.5px}
+
+/* ---- Roadmap + footer ---- */
+.road{display:grid;grid-template-columns:repeat(3,1fr);gap:28px}
+
+/* ---- Packet anatomy comparison ---- */
+.packets{display:grid;grid-template-columns:1fr 1fr;gap:28px;align-items:start}
+.pkt h3{font-family:'Archivo',sans-serif;font-weight:700;font-size:19px;margin-bottom:14px}
+.pkt h3 .mono{font-size:12px;font-weight:600;color:var(--ink-soft);letter-spacing:.1em}
+.layer{border:1.5px solid var(--ink);padding:12px 16px;margin-bottom:-1.5px;background:var(--paper-raised)}
+.layer .lname{font-family:'IBM Plex Mono',monospace;font-size:11.5px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-soft);display:block;margin-bottom:3px}
+.layer .lval{font-family:'IBM Plex Mono',monospace;font-size:13.5px;color:var(--ink);word-break:break-word}
+.layer.hot{border-color:var(--petrol);border-width:2.5px;background:#EAF4F3;position:relative;z-index:1}
+.layer.hot .lname{color:var(--petrol)}
+.layer.dim{background:var(--paper);border-style:dashed;border-width:1px;border-color:#B9C2BE}
+.layer.dim .lname,.layer.dim .lval{color:#96A29D}
+.layer .addr{color:var(--punch);font-weight:600}
+.layer.hot .addr{color:var(--petrol);font-weight:600}
+.pkt-note{margin-top:16px;font-size:14.5px;color:var(--ink-soft);border-left:3px solid var(--rule);padding-left:14px}
+.pkt-note b{color:var(--ink)}
+@media(max-width:840px){.packets{grid-template-columns:1fr}}
+
+.road .step h3 .tag{
+  font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;
+  letter-spacing:.1em;padding:3px 8px;margin-left:8px;vertical-align:middle;
+}
+.tag-live{background:var(--petrol);color:var(--paper)}
+.tag-next{border:1px solid var(--ink-soft);color:var(--ink-soft)}
+footer{
+  border-top:2px solid var(--ink);padding:36px 0 48px;
+  font-family:'IBM Plex Mono',monospace;font-size:13px;color:var(--ink-soft);
+}
+footer .wrap{display:flex;justify-content:space-between;flex-wrap:wrap;gap:12px 24px}
+
+@media(max-width:840px){
+  .steps,.road{grid-template-columns:1fr}
+  .hero{padding:56px 0 44px}
+  section{padding:48px 0}
+}
+@media(prefers-reduced-motion:reduce){
+  .cursor{animation:none}
+  .btn{transition:none}
+}
+</style>
+</head>
+<body>
+
+<!-- RFC-memo framing: the protocol document vernacular -->
+<header class="memo">
+  <div class="wrap">
+    <span><b>DNX</b> — Domain Native eXchange</span>
+    <span>Category: <b>Experimental</b></span>
+    <span>Working draft · <b>v0.1</b> · July 2026</span>
+    <span><b>dnxroute.com</b></span>
+  </div>
+</header>
+
+<main>
+<div class="hero">
+  <div class="wrap">
+    <h1>
+      <span class="was mono">203.0.113.7</span><br>
+      <span class="now">computer1.internal.<wbr>dnxroute.com</span>
+    </h1>
+    <p class="sub">DNX is an experimental internet protocol where the <b>name is the address</b>.
+    Machines register a fully-qualified domain bound to a cryptographic key. No visible IPs,
+    no NAT configuration, no port forwarding — and every reply is <b>signed by the machine that owns the name</b>.</p>
+    <div class="cta-row">
+      <a class="btn btn-solid" href="#proof">See the first packet</a>
+      <a class="btn btn-ghost" href="/protocol.html">Read the protocol spec</a>
+    </div>
+  </div>
+</div>
+<!-- ============ PROOF: the replay terminal (signature) ============ -->
+<section id="proof">
+  <div class="wrap">
+    <div class="eyebrow">Recorded July 13, 2026 · 02:29 UTC</div>
+    <h2>A cloud server pinged a laptop behind a home router. By name.</h2>
+    <p class="lede">This is a <b>replay of the actual session</b> — real commands, real round-trip
+    times. The target machine sits behind an ordinary residential NAT with zero configuration.
+    The first reply includes the full NAT hole-punch negotiation; the second rides the
+    established direct path.</p>
+    <div class="terminal" aria-label="Recorded terminal session replay">
+      <div class="term-bar">
+        <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+        <span class="term-title">xbitium@dnxroute1 — recorded session</span>
+      </div>
+      <div class="term-body" id="term"><span class="cursor"></span></div>
+    </div>
+    <p class="term-caption">rtt drops <b>396 → 49 ms</b> because ping #1 pays for the hole punch; ping #2 is a direct peer-to-peer path.</p>
+  </div>
+</section>
+
+<!-- ============ HOW: a genuine 3-step sequence ============ -->
+<section>
+  <div class="wrap">
+    <div class="eyebrow">Protocol flow</div>
+    <h2>Resolve. Punch. Verify.</h2>
+    <div class="steps">
+      <div class="step">
+        <span class="n">STEP 1 — RESOLVE</span>
+        <h3>The living registry</h3>
+        <p>Every node heartbeats to the registry, which binds each name to a
+        <code>(public key, live endpoint)</code> pair — first-come, first-served.
+        Records update in seconds, not TTL-hours.</p>
+      </div>
+      <div class="step">
+        <span class="n">STEP 2 — INTRO</span>
+        <h3>NATs open themselves</h3>
+        <p>The registry introduces the two nodes; each fires packets at the other,
+        opening both NATs simultaneously. No port forwarding, no VPN, no router settings.</p>
+      </div>
+      <div class="step">
+        <span class="n">STEP 3 — VERIFY</span>
+        <h3>Identity, not just reachability</h3>
+        <p>Every reply is ed25519-signed by the key bound to the name.
+        <code>identity_verified=true</code> means you reached the machine that
+        <b>owns</b> the name — something ICMP never proved.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ OLD WORLD vs DNX ============ -->
+<section>
+  <div class="wrap">
+    <div class="eyebrow">What changes</div>
+    <h2>The numeric layer becomes invisible.</h2>
+    <table>
+      <thead><tr><th>Today (TCP/IP + DNS + NAT)</th><th>DNX</th></tr></thead>
+      <tbody>
+        <tr><td>Machines are numbers: <span class="mono">10.0.0.14</span>, <span class="mono">192.168.1.x</span></td>
+            <td>Machines are names: <span class="mono">computer1.internal.dnxroute.com</span></td></tr>
+        <tr><td>DNS records go stale for hours (TTL)</td>
+            <td>Registry updates in seconds via signed heartbeats</td></tr>
+        <tr><td>Reaching a home machine: port forwarding, DDNS, VPN</td>
+            <td>Reaching a home machine: <span class="mono">dnx ping mymac.internal…</span></td></tr>
+        <tr><td>Ping proves an address answered</td>
+            <td>Ping proves the <b>name's owner</b> answered (ed25519-signed)</td></tr>
+        <tr><td>Identity bolted on above the network (TLS, later)</td>
+            <td>Identity native to the address layer itself</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ============ PACKET ANATOMY ============ -->
+<section id="packet">
+  <div class="wrap">
+    <div class="eyebrow">Packet anatomy</div>
+    <h2>Same wire. Different brain.</h2>
+    <p class="lede">A DNX packet is not magic — it rides inside an ordinary UDP/IP datagram,
+    forwarded by the same routers as everything else. What changes is <b>where the meaning
+    lives</b>: in TCP/IP, the address is numbers in the outer header and identity is nobody's
+    job. In DNX, the numeric layers fade into plumbing, and the layer that matters carries
+    a <b>name</b> and a <b>signature</b>.</p>
+    <div class="packets">
+      <div class="pkt">
+        <h3>A packet today <span class="mono">— TCP/IP</span></h3>
+        <div class="layer">
+          <span class="lname">IP header — the address</span>
+          <span class="lval">src <span class="addr">203.0.113.7</span> &nbsp;&rarr;&nbsp; dst <span class="addr">198.51.100.22</span></span>
+        </div>
+        <div class="layer">
+          <span class="lname">TCP header</span>
+          <span class="lval">port 51512 &rarr; 443, seq, flags</span>
+        </div>
+        <div class="layer">
+          <span class="lname">Payload</span>
+          <span class="lval">your data</span>
+        </div>
+        <p class="pkt-note"><b>Humans manage the numbers</b> (subnets, NAT rules, port
+        forwards), and <b>identity lives nowhere in the packet</b> — you reached an address;
+        proving <em>who</em> answered is TLS's job, bolted on later, above.</p>
+      </div>
+      <div class="pkt">
+        <h3>A DNX packet <span class="mono">— v0.1</span></h3>
+        <div class="layer dim">
+          <span class="lname">IP header</span>
+          <span class="lval">numbers — plumbing, invisible to you</span>
+        </div>
+        <div class="layer dim">
+          <span class="lname">UDP header</span>
+          <span class="lval">ports — plumbing, invisible to you</span>
+        </div>
+        <div class="layer hot">
+          <span class="lname">DNX envelope — the address <em>and</em> the identity</span>
+          <span class="lval">name: <span class="addr">mymac.internal.dnxroute.com</span><br>
+          pubkey: ed25519 &middot; nonce + timestamp &middot; <b>signature</b></span>
+        </div>
+        <div class="layer">
+          <span class="lname">Payload</span>
+          <span class="lval">your data — signed today, encrypted in v0.2</span>
+        </div>
+        <p class="pkt-note"><b>The address is a name</b>, bound to a key. Identity travels
+        <b>inside the packet itself</b>: every reply is verifiable against the key that owns
+        the name. The numbers still exist — but nobody has to see, type, or manage them.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ BIRTH CERTIFICATE ============ -->
+<section>
+  <div class="wrap">
+    <div class="eyebrow">Registry log · first names bound</div>
+    <h2>The birth certificate</h2>
+    <p class="lede">From the registry's journal on launch night — the first names ever
+    bound to keys on the DNX network.</p>
+    <div class="logbox">
+dnx-registry up on :4400 — <b>the name IS the address.</b><br>
+<span class="hl">NEW name bound:</span> dnxroute2.internal.dnxroute.com → key SXH3F777…<br>
+<span class="hl">NEW name bound:</span> dnxroute1.internal.dnxroute.com → key 2J7LLD+m…<br>
+<span class="hl">NEW name bound:</span> mymac.internal.dnxroute.com → key r5mqD5mO…<br>
+INTRO dnxroute1.internal.dnxroute.com → dnxroute2.internal.dnxroute.com<br>
+<b>reply … rtt=2.53 ms  identity_verified=true</b>
+    </div>
+  </div>
+</section>
+
+<!-- ============ ROADMAP ============ -->
+<section>
+  <div class="wrap">
+    <div class="eyebrow">Status</div>
+    <h2>Built in the open, one layer at a time.</h2>
+    <div class="road">
+      <div class="step">
+        <h3>v0.1 <span class="tag tag-live">LIVE</span></h3>
+        <p>Living registry at <code>registry.dnxroute.com</code> · signed name→key binding ·
+        NAT hole punching · identity-verified ping. Proven across the public internet
+        and a residential NAT.</p>
+      </div>
+      <div class="step">
+        <h3>v0.2 <span class="tag tag-next">NEXT</span></h3>
+        <p>Encrypted channels (X25519 + ChaCha20-Poly1305) and a reliable stream layer —
+        so real applications ride DNX, ending with <code>ssh</code> into a NAT'd machine
+        entirely over DNX.</p>
+      </div>
+      <div class="step">
+        <h3>v0.3 <span class="tag tag-next">PLANNED</span></h3>
+        <p>Relay fallback for symmetric NATs · <code>dnx tunnel</code> port gateway ·
+        federated registries with a signed name table.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ RUN A NODE ============ -->
+<section id="run">
+  <div class="wrap">
+    <div class="eyebrow">Participate</div>
+    <h2>Run a node. Claim a name.</h2>
+    <p class="lede">DNX is an experiment in what addressing should feel like.
+    The prototype is a single static binary — one command and your machine has a
+    name on the network, bound to a key only it holds.</p>
+    <div class="logbox">
+<span class="hl">$</span> dnxd --name <b>yourmachine</b>.internal.dnxroute.com --registry registry.dnxroute.com:4400<br>
+<span class="hl">$</span> dnx ping dnxroute1.internal.dnxroute.com
+    </div>
+    <div class="cta-row" style="margin-top:28px">
+      <a class="btn btn-solid" href="mailto:hello@dnxroute.com?subject=DNX%20early%20access">Request early access</a>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span><b>DNX</b> · dnxroute.com · 2026</span>
+    <span><a href="/protocol.html">Protocol specification</a></span>
+    <span>Status: Experimental — expect breakage, that's the fun part</span>
+    <span>Bootstrap is the last atom of legacy DNS. Everything after is names.</span>
+  </div>
+</footer>
+
+<script>
+/* ==========================================================
+   Terminal replay — types the ACTUAL recorded session.
+   Honors prefers-reduced-motion: renders instantly, no typing.
+   ========================================================== */
+(function(){
+  const lines = [
+    {t:'$ dnx ping mymac.internal.dnxroute.com', cls:'', cmd:true},
+    {t:'DNX ping mymac.internal.dnxroute.com (no IPs were typed in the making of this packet)', cls:'dim'},
+    {t:'reply from mymac.internal.dnxroute.com: rtt=396.43 ms  identity_verified=true', cls:'ok'},
+    {t:'  \u2514 includes full NAT hole-punch negotiation', cls:'note'},
+    {t:'$ dnx ping mymac.internal.dnxroute.com', cls:'', cmd:true},
+    {t:'reply from mymac.internal.dnxroute.com: rtt=49.30 ms  identity_verified=true', cls:'ok'},
+    {t:'  \u2514 direct peer-to-peer path, established', cls:'note'}
+  ];
+  const term = document.getElementById('term');
+  const cursor = term.querySelector('.cursor');
+  const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  function addLine(cls){
+    const el = document.createElement('div');
+    if (cls) el.className = cls;
+    term.insertBefore(el, cursor);
+    return el;
+  }
+
+  if (reduced){
+    // no animation: render the whole session at once
+    lines.forEach(l => { addLine(l.cls).textContent = l.t; });
+    return;
+  }
+
+  let li = 0;
+  function playLine(){
+    if (li >= lines.length) return;
+    const l = lines[li++];
+    const el = addLine(l.cls);
+    if (l.cmd){
+      // commands "type" character by character, like a human at the keys
+      let ci = 0;
+      (function typeChar(){
+        el.textContent = l.t.slice(0, ++ci);
+        if (ci < l.t.length) setTimeout(typeChar, 34);
+        else setTimeout(playLine, 420); // brief pause after enter
+      })();
+    } else {
+      // output appears whole, after a network-ish beat
+      el.textContent = l.t;
+      setTimeout(playLine, l.cls === 'ok' ? 650 : 320);
+    }
+  }
+  // start when the terminal scrolls into view (or immediately if visible)
+  const io = new IntersectionObserver((entries)=>{
+    if (entries[0].isIntersecting){ io.disconnect(); setTimeout(playLine, 500); }
+  }, {threshold: 0.35});
+  io.observe(term);
+})();
+</script>
+</body>
+</html>

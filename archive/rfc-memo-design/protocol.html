@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DNX Protocol Specification — v0.1</title>
+<meta name="description" content="Technical specification of DNX v0.1: wire format, identity model, registration, resolution, NAT rendezvous, security analysis, and known limitations.">
+<link rel="canonical" href="https://dnxroute.com/protocol.html">
+<meta name="theme-color" content="#12616B">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="DNX — Domain Native eXchange">
+<meta property="og:title" content="DNX Protocol Specification — v0.1">
+<meta property="og:description" content="Wire format, identity model, NAT rendezvous, security analysis and known limitations of the DNX name-native overlay protocol.">
+<meta property="og:url" content="https://dnxroute.com/protocol.html">
+<meta name="twitter:card" content="summary">
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"TechArticle","headline":"DNX Protocol Specification v0.1","about":"Name-native overlay network protocol","url":"https://dnxroute.com/protocol.html","datePublished":"2026-07-13","publisher":{"@type":"Organization","name":"DNX","url":"https://dnxroute.com/"}}
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;850&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* Shared DNX tokens — same identity as the landing page */
+:root{
+  --paper:#F2F4F3;--paper-raised:#FAFBFA;--ink:#10201B;--ink-soft:#40544D;
+  --petrol:#12616B;--punch:#E8402A;--term-bg:#0C1614;--term-line:#1E2E29;
+  --phosphor:#9FE8C2;--phosphor-dim:#5E8F79;--rule:#D4DAD7;--max:880px;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--paper);color:var(--ink);font-family:'IBM Plex Sans',system-ui,sans-serif;font-size:16.5px;line-height:1.7;-webkit-font-smoothing:antialiased}
+::selection{background:var(--petrol);color:var(--paper)}
+a{color:var(--petrol)}
+.wrap{max-width:var(--max);margin:0 auto;padding:0 24px}
+.mono{font-family:'IBM Plex Mono',monospace}
+.memo{border-bottom:2px solid var(--ink);padding:18px 0 14px;font-family:'IBM Plex Mono',monospace;font-size:12.5px;letter-spacing:.02em;color:var(--ink-soft)}
+.memo .wrap{display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px 24px}
+.memo b{color:var(--ink);font-weight:600}
+.memo a{text-decoration:none}
+h1{font-family:'Archivo',sans-serif;font-weight:850;font-size:clamp(30px,5vw,52px);letter-spacing:-0.025em;line-height:1.05;margin:56px 0 10px}
+.sub{font-size:18px;color:var(--ink-soft);max-width:640px}
+h2{font-family:'Archivo',sans-serif;font-weight:850;font-size:clamp(22px,3vw,30px);letter-spacing:-0.015em;margin:64px 0 16px;padding-top:24px;border-top:1px solid var(--rule)}
+h2 .sec{font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;color:var(--punch);display:block;letter-spacing:.12em;margin-bottom:6px}
+h3{font-family:'Archivo',sans-serif;font-weight:700;font-size:18.5px;margin:32px 0 10px}
+p{margin:0 0 16px;max-width:720px}
+p b{font-weight:600}
+ul,ol{margin:0 0 16px 22px;max-width:700px}
+li{margin-bottom:8px}
+code{font-family:'IBM Plex Mono',monospace;font-size:.88em;background:var(--paper-raised);border:1px solid var(--rule);padding:1px 6px;color:var(--petrol)}
+pre{background:var(--term-bg);color:var(--phosphor);border:1px solid var(--term-line);border-radius:8px;padding:20px 22px;font-family:'IBM Plex Mono',monospace;font-size:13.5px;line-height:1.75;overflow-x:auto;margin:0 0 20px;white-space:pre}
+pre .c{color:var(--phosphor-dim)}
+table{width:100%;border-collapse:collapse;font-size:14.5px;margin:0 0 24px}
+th{font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;text-align:left;padding:10px 12px;border-bottom:2px solid var(--ink)}
+td{padding:11px 12px;border-bottom:1px solid var(--rule);vertical-align:top}
+td:first-child{font-family:'IBM Plex Mono',monospace;font-size:13.5px;color:var(--petrol);font-weight:500;white-space:nowrap}
+.callout{border-left:4px solid var(--punch);background:var(--paper-raised);padding:16px 20px;margin:0 0 20px;max-width:720px}
+.callout.note{border-left-color:var(--petrol)}
+footer{border-top:2px solid var(--ink);margin-top:80px;padding:32px 0 44px;font-family:'IBM Plex Mono',monospace;font-size:13px;color:var(--ink-soft)}
+footer .wrap{display:flex;justify-content:space-between;flex-wrap:wrap;gap:12px 24px}
+</style>
+</head>
+<body>
+<header class="memo">
+  <div class="wrap">
+    <span><b>DNX</b> — Protocol Specification</span>
+    <span>Category: <b>Experimental</b></span>
+    <span>Version: <b>0.1</b> · July 2026</span>
+    <span><a href="/">← dnxroute.com</a></span>
+  </div>
+</header>
+<main class="wrap">
+<h1>DNX Protocol, v0.1</h1>
+<p class="sub">A name-native overlay protocol: fully-qualified domain names as addresses,
+ed25519 keys as identity, UDP as substrate. This document specifies the wire format,
+protocol flows, and security model of the running v0.1 implementation — including its
+limitations, stated plainly.</p>
+<h2><span class="sec">§1</span>Design goals and non-goals</h2>
+<p><b>Goals.</b> (1) Names are the only addresses humans and applications touch.
+(2) Identity is native to the address layer: a name is cryptographically bound to a keypair,
+and reaching a name yields proof you reached its owner. (3) Reachability is symmetric
+regardless of NAT: a machine behind an unconfigured residential router is as addressable
+as a public server. (4) Freshness: name records update in seconds, not TTL-hours.</p>
+<p><b>Non-goals (v0.1).</b> DNX does not replace IP <em>forwarding</em>. Packets are UDP/IP
+datagrams routed hop-by-hop by existing infrastructure; DNX is an overlay that makes the
+numeric layer invisible rather than absent. True name-based forwarding in routers is a
+research direction (cf. Named Data Networking), not a v0.1 claim. v0.1 also does not yet
+encrypt payloads — it authenticates them (§6).</p>
+
+<h2><span class="sec">§2</span>Architecture</h2>
+<p>Three components. A <b>registry</b> (reference deployment: <code>registry.dnxroute.com:4400/udp</code>)
+maintains the live name table. A <b>node agent</b> (<code>dnxd</code>) runs on every participating
+machine: it holds the identity key, heartbeats, answers rendezvous cues, and exposes a
+loopback-only control API (<code>127.0.0.1:4401</code>) for local tools. A <b>CLI</b>
+(<code>dnx</code>) is a thin client of that local API.</p>
+<div class="callout note"><b>One socket rule.</b> Each node performs all DNX traffic —
+heartbeats, control queries, and peer traffic — over a single UDP socket. The NAT mapping
+created by heartbeats is therefore the same mapping peers punch toward. A second socket
+silently breaks traversal.</div>
+<p><b>Identity.</b> On first boot a node generates an ed25519 keypair; the key, not the
+name, is the machine's fundamental identity. Names are human-readable handles bound to
+keys at the registry, first-come-first-served (§6.1). Keys are stored locally
+(<code>~/.dnx/identity.json</code>, mode 0600) and never transmitted; only public keys and
+signatures cross the wire.</p>
+<p><b>Bootstrap.</b> The registry's own address is resolved once via legacy DNS. This is
+the single point where the old namespace appears; every subsequent operation is name-native.</p>
+
+<h2><span class="sec">§3</span>Wire format</h2>
+<p>v0.1 transports JSON-encoded messages as single UDP datagrams (≤ 64 KiB). One envelope
+serves all message kinds; unused fields are omitted. JSON is a deliberate prototype choice —
+inspectable with <code>tcpdump</code> — and is slated for replacement by compact binary
+framing in v0.2.</p>
+<pre>{
+  "kind":     "REGISTER",              <span class="c">// message verb, §4</span>
+  "name":     "computer1.internal.dnxroute.com",
+  "target":   "",                      <span class="c">// FQDN being queried (RESOLVE/INTRO/PUNCH)</span>
+  "pubkey":   "base64(ed25519 pub)",   <span class="c">// identity, 32 bytes pre-encoding</span>
+  "endpoint": "203.0.113.7:44313",     <span class="c">// ip:port — control-plane only, registry-observed</span>
+  "ts":       1783312169042,           <span class="c">// unix milliseconds, replay window §6.3</span>
+  "nonce":    "base64url(12 bytes)",   <span class="c">// request/response matching + replay</span>
+  "sig":      "base64(ed25519 sig)",   <span class="c">// over the signing string below</span>
+  "info":     ""                       <span class="c">// free text (errors, diagnostics)</span>
+}</pre>
+<p><b>Signing.</b> Signatures cover the canonical string
+<code>"dnx1|" + kind + "|" + name + "|" + target + "|" + ts + "|" + nonce</code>.
+The <code>endpoint</code> field is deliberately excluded: it is not asserted by the node
+but <em>observed</em> by the registry from the datagram's UDP source address. A node cannot
+lie about where it is, because it never says where it is.</p>
+<h2><span class="sec">§4</span>Message kinds</h2>
+<table>
+<thead><tr><th>Kind</th><th>Direction</th><th>Purpose</th><th>Signed by</th></tr></thead>
+<tbody>
+<tr><td>REGISTER</td><td>node → registry</td><td>Bind/refresh name→key; heartbeat keeps the NAT mapping warm</td><td>node</td></tr>
+<tr><td>REGISTER_ACK</td><td>registry → node</td><td>Confirms binding; echoes the observed public endpoint (STUN-lite for free)</td><td>— <em>(v0.2: registry)</em></td></tr>
+<tr><td>RESOLVE</td><td>node → registry</td><td>Query a target name</td><td>node</td></tr>
+<tr><td>RESOLVE_RESP</td><td>registry → node</td><td>Target's public key + live endpoint (fresh &lt; 60 s only)</td><td>— <em>(v0.2: registry)</em></td></tr>
+<tr><td>INTRO</td><td>node → registry</td><td>Request rendezvous with a target</td><td>node</td></tr>
+<tr><td>PUNCH</td><td>registry → target</td><td>"Requester at endpoint E wants in — punch back"</td><td>— <em>(v0.1 gap, §6.4)</em></td></tr>
+<tr><td>PING</td><td>node → node</td><td>Liveness probe carrying a fresh nonce</td><td>sender</td></tr>
+<tr><td>PONG</td><td>node → node</td><td>Echoes the nonce; proof of name ownership</td><td>responder</td></tr>
+<tr><td>ERROR</td><td>registry → node</td><td>Rejection with reason in <code>info</code></td><td>—</td></tr>
+</tbody>
+</table>
+
+<h2><span class="sec">§5</span>Protocol flows</h2>
+<h3>5.1 Registration &amp; presence</h3>
+<p>Every node sends a signed <code>REGISTER</code> every <b>15 seconds</b> — chosen to sit
+under typical NAT UDP mapping timeouts (~30 s). The registry verifies the signature against
+the message's own <code>pubkey</code>, enforces the binding rule (§6.1), stores the datagram's
+source address as the node's live endpoint, and stamps <code>last_seen</code>. Records unseen
+for <b>60 s</b> are treated as offline; unseen for 10× that, pruned.</p>
+<h3>5.2 Resolution</h3>
+<p>A signed <code>RESOLVE</code> for a fresh name returns <code>RESOLVE_RESP</code> with the
+target's public key and endpoint. The key is the point: every subsequent packet from that
+peer can be verified against it. Resolution answers are useful for seconds, not hours —
+the next heartbeat may move the endpoint, and that is fine, because resolution is cheap.</p>
+<h3>5.3 Rendezvous (NAT traversal)</h3>
+<ol>
+<li>A sends <code>INTRO(target=B)</code> to the registry.</li>
+<li>The registry forwards <code>PUNCH(name=A, endpoint=A_observed)</code> to B's last endpoint.</li>
+<li>B immediately fires several datagrams at A's endpoint. Each outbound packet installs
+a mapping in B's NAT permitting A's inbound traffic — and symmetrically, A's retrying pings
+open A's NAT for B.</li>
+<li>Within one round of retries (300 ms cadence, 8 s budget) the cones are open and traffic
+flows peer-to-peer. The registry is no longer on the path.</li>
+</ol>
+<p>This succeeds against full-cone and port-restricted NATs. <b>Symmetric NATs</b> — which
+allocate a new mapping per destination — defeat it; v0.3 adds relayed fallback (§8).</p>
+<h3>5.4 Verified ping</h3>
+<p>The requester sends signed <code>PING</code>s carrying a fresh nonce until a
+<code>PONG</code> echoing that nonce arrives. The pong is verified against the public key
+obtained at resolution — <em>not</em> against any key the responder claims. A verified pong
+therefore proves: the name resolved, the path works, and the responder holds the private
+key bound to that name. RTT is measured first-send to first-valid-pong, so a first ping
+includes traversal cost (observed: 396 ms cold, 49 ms established, cloud↔residential).</p>
+<h2><span class="sec">§6</span>Security model &amp; analysis</h2>
+<h3>6.1 Name binding</h3>
+<p>First-come-first-served: the first valid <code>REGISTER</code> for a name binds it to that
+key permanently (for the record's lifetime). A <code>REGISTER</code> for a bound name under a
+different key is rejected regardless of signature validity — possession of a name requires
+possession of its key.</p>
+<h3>6.2 What a verified pong proves — and what it doesn't</h3>
+<p>It proves the responder holds the private key the registry associates with the name.
+It does <em>not</em> yet prove confidentiality: v0.1 payloads are authenticated but
+plaintext. Do not move secrets over DNX v0.1.</p>
+<h3>6.3 Replay resistance</h3>
+<p>Signed messages carry millisecond timestamps enforced within a <b>±30 s</b> window,
+plus per-message 96-bit random nonces. Pong verification additionally requires echoing
+the requester's nonce, binding each pong to one live probe.</p>
+<h3>6.4 Known weaknesses in v0.1 — stated plainly</h3>
+<ul>
+<li><b>Registry responses are unsigned.</b> <code>RESOLVE_RESP</code> and
+<code>REGISTER_ACK</code> can be forged by an on-path attacker, enabling endpoint poisoning.
+Crucially this does <em>not</em> enable impersonation — a poisoned endpoint still cannot
+produce pongs that verify against the genuine key — but it enables denial of service and
+traffic misdirection. Fix: registry keypair + signed responses (v0.2).</li>
+<li><b><code>PUNCH</code> is unsigned.</b> A spoofed punch cue can induce a node to emit a
+small burst of datagrams to an arbitrary address — a minor reflection primitive. Fix folds
+into signed registry traffic (v0.2).</li>
+<li><b>The registry is a single point of failure and a metadata observer.</b> It learns
+who resolves whom, and its unavailability halts <em>new</em> rendezvous (established peer
+paths keep working). Federation and a signed, replicated name table are the v0.3+ answer.</li>
+<li><b>FCFS is squatting-friendly.</b> Nothing stops early registration of desirable names.
+Acceptable for an experiment; a production DNX needs namespace delegation anchored to
+domain ownership proofs.</li>
+<li><b>No payload encryption.</b> §6.2. This is the headline item of v0.2.</li>
+</ul>
+
+<h2><span class="sec">§7</span>Constants</h2>
+<table>
+<thead><tr><th>Constant</th><th>Value</th><th>Rationale</th></tr></thead>
+<tbody>
+<tr><td>heartbeat</td><td>15 s</td><td>Below common ~30 s NAT UDP mapping timeout</td></tr>
+<tr><td>freshness</td><td>60 s</td><td>Missed-heartbeat tolerance before a name reads offline</td></tr>
+<tr><td>prune</td><td>600 s</td><td>10× freshness; dead records leave the table</td></tr>
+<tr><td>replay window</td><td>±30 s</td><td>Clock-skew tolerance vs. replay surface</td></tr>
+<tr><td>ping retry</td><td>300 ms / 8 s</td><td>Covers traversal establishment within one attempt</td></tr>
+<tr><td>registry port</td><td>4400/udp</td><td>Reference deployment</td></tr>
+</tbody>
+</table>
+
+<h2><span class="sec">§8</span>Roadmap</h2>
+<p><b>v0.2 — confidentiality and streams.</b> X25519 key agreement authenticated by the
+existing ed25519 identities; ChaCha20-Poly1305 AEAD channels; registry-signed control
+responses; a minimal reliable stream layer; <code>dnx tunnel</code> exposing TCP services
+over DNX. Milestone: an SSH session into a NAT'd machine carried entirely over DNX.</p>
+<p><b>v0.3 — resilience.</b> Relayed fallback for symmetric NATs; registry federation;
+signed name-table replication. <b>Beyond:</b> namespace delegation via DNS-anchored
+ownership proofs; binary framing; the long game of pushing names down the stack.</p>
+
+<div class="callout"><b>Status.</b> This document describes running code, not intent —
+every constant, field, and weakness above is present in the v0.1 implementation deployed
+at <code>registry.dnxroute.com</code>. Where this spec and the code disagree, the code is
+the bug.</div>
+</main>
+<footer>
+  <div class="wrap">
+    <span><b>DNX</b> · Protocol Specification v0.1 · 2026</span>
+    <span><a href="/">dnxroute.com</a></span>
+    <span>info@dnxroute.com</span>
+  </div>
+</footer>
+</body>
+</html>
