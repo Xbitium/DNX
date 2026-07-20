@@ -42,9 +42,75 @@ type registry struct {
 }
 
 const (
-	staleAfter = 60 * time.Second // no heartbeat in 60s => node considered offline
+	staleAfter = 60 * time.Second // no heartbeat in 60s => ENDPOINT considered offline
 	maxSkew    = 30 * time.Second // signed-timestamp tolerance (replay window)
+
+	// bindingRetention is how long a name -> key binding survives with no
+	// heartbeat at all.
+	//
+	// This is OWNERSHIP, and it is deliberately not the same thing as
+	// liveness. An earlier version deleted the entire record after ten
+	// minutes of silence, which meant that switching a machine off for
+	// long enough handed its name to whoever registered next — and the
+	// rightful owner was then refused its own name, because the name was
+	// now bound to someone else's key. Names are owned, not leased to
+	// whoever happens to be awake.
+	bindingRetention = 365 * 24 * time.Hour
 )
+
+// bindResult reports what a REGISTER did, so the outcome can be tested
+// without a network.
+type bindResult int
+
+const (
+	bindNew       bindResult = iota // name was unclaimed; this key now owns it
+	bindRefreshed                   // same key as before; endpoint updated
+	bindRejected                    // name is owned by a DIFFERENT key
+)
+
+// bind applies the registration rule: the first key to claim a name owns
+// it, and that ownership does not lapse merely because the node went quiet.
+func (r *registry) bind(name, pubB64 string, endpoint *net.UDPAddr, now time.Time) bindResult {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	rec, exists := r.names[name]
+	if exists && rec.PubB64 != pubB64 {
+		return bindRejected
+	}
+	if !exists {
+		rec = &record{PubB64: pubB64}
+		r.names[name] = rec
+	}
+	rec.Endpoint = endpoint // observed source address = live NAT mapping
+	rec.LastSeen = now
+	if exists {
+		return bindRefreshed
+	}
+	return bindNew
+}
+
+// prune separates the two lifetimes. A quiet node loses its ENDPOINT
+// quickly, so nobody is told where to find something that has moved or
+// gone away — but it keeps its NAME, because ownership is not liveness.
+// Returns counts for logging and tests.
+func (r *registry) prune(now time.Time) (wentOffline, retired int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for name, rec := range r.names {
+		if rec.Endpoint != nil && now.Sub(rec.LastSeen) > staleAfter {
+			rec.Endpoint = nil // forget WHERE it is; keep WHO owns it
+			wentOffline++
+			log.Printf("offline: %s (binding retained)", name)
+		}
+		if now.Sub(rec.LastSeen) > bindingRetention {
+			delete(r.names, name)
+			retired++
+			log.Printf("RETIRED binding for %s after %s with no heartbeat", name, bindingRetention)
+		}
+	}
+	return wentOffline, retired
+}
 
 func main() {
 	listen := flag.String("listen", ":4400", "UDP address to listen on")
@@ -93,23 +159,16 @@ func (r *registry) handle(conn *net.UDPConn, src *net.UDPAddr, m *proto.Message)
 			reply(conn, src, errMsg("bad signature"))
 			return
 		}
-		r.mu.Lock()
-		rec, exists := r.names[m.Name]
-		if exists && rec.PubB64 != m.PubKey {
-			// Name already bound to a DIFFERENT key => hijack attempt.
-			r.mu.Unlock()
+		switch r.bind(m.Name, m.PubKey, src, time.Now()) {
+		case bindRejected:
+			// The name is owned by a different key. This is the case that
+			// protects an offline owner from having its name taken.
 			log.Printf("REJECT hijack: %s from %s", m.Name, src)
 			reply(conn, src, errMsg("name is bound to another key"))
 			return
-		}
-		if !exists {
-			rec = &record{PubB64: m.PubKey}
-			r.names[m.Name] = rec
+		case bindNew:
 			log.Printf("NEW name bound: %s -> key %.12s… (at %s)", m.Name, m.PubKey, src)
 		}
-		rec.Endpoint = src // the magic: observed source addr = live NAT mapping
-		rec.LastSeen = time.Now()
-		r.mu.Unlock()
 
 		// Ack echoes back the observed endpoint — lets the node learn
 		// its own public address (STUN-lite, for free).
@@ -123,7 +182,7 @@ func (r *registry) handle(conn *net.UDPConn, src *net.UDPAddr, m *proto.Message)
 	case proto.KindResolve:
 		r.mu.Lock()
 		rec, ok := r.names[m.Target]
-		fresh := ok && time.Since(rec.LastSeen) < staleAfter
+		fresh := ok && rec.Endpoint != nil && time.Since(rec.LastSeen) < staleAfter
 		var resp *proto.Message
 		if fresh {
 			resp = &proto.Message{
@@ -142,7 +201,7 @@ func (r *registry) handle(conn *net.UDPConn, src *net.UDPAddr, m *proto.Message)
 	case proto.KindIntro:
 		r.mu.Lock()
 		rec, ok := r.names[m.Target]
-		fresh := ok && time.Since(rec.LastSeen) < staleAfter
+		fresh := ok && rec.Endpoint != nil && time.Since(rec.LastSeen) < staleAfter
 		var target *net.UDPAddr
 		if fresh {
 			target = rec.Endpoint
@@ -170,14 +229,7 @@ func (r *registry) handle(conn *net.UDPConn, src *net.UDPAddr, m *proto.Message)
 // pruneLoop drops records that stopped heartbeating.
 func (r *registry) pruneLoop() {
 	for range time.Tick(30 * time.Second) {
-		r.mu.Lock()
-		for name, rec := range r.names {
-			if time.Since(rec.LastSeen) > 10*staleAfter {
-				delete(r.names, name)
-				log.Printf("pruned dead name: %s", name)
-			}
-		}
-		r.mu.Unlock()
+		r.prune(time.Now())
 	}
 }
 
