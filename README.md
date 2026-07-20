@@ -1,10 +1,12 @@
 # DNX — Domain Native eXchange
 
-An experimental identity-native networking protocol. Names are the address:
-every DNX endpoint registers a fully-qualified domain bound to an ed25519
-keypair, and every reply is cryptographically verifiable against the key
-that owns the name — no visible IPs, no NAT configuration, no port
-forwarding.
+**The domain is the network.** Names, not numbers. Identity, not assumptions.
+
+An experimental networking protocol in which your namespace hierarchy becomes
+the routing topology: routers forward on names, every endpoint registers a
+fully-qualified domain bound to an ed25519 keypair, and every reply is
+cryptographically verifiable against the key that owns that name — no visible
+IPs, no NAT configuration, no port forwarding.
 
 **Live:** [dnxroute.com](https://dnxroute.com) · protocol spec at
 [dnxroute.com/protocol](https://dnxroute.com/protocol) · a live, public,
