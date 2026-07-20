@@ -6,6 +6,11 @@
   <title>DNXRoute — The domain is the network</title>
   <meta name="description" content="DNX is an experimental networking protocol in which your namespace hierarchy becomes the routing topology: routers forward on names, and every reply is verifiable against the key that owns that name." />
   <meta name="theme-color" content="#0f5f68" />
+  <link rel="canonical" href="https://dnxroute.com/" />
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="DNX — The domain is the network" />
+  <meta property="og:description" content="An experimental protocol where the namespace hierarchy becomes the routing topology. Names route, keys prove." />
+  <meta property="og:url" content="https://dnxroute.com/" />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
@@ -19,104 +24,263 @@
         <div class="muted">Domain Native eXchange</div>
       </div>
       <nav class="nav">
-        <a href="#why">Why DNX?</a>
-        <a href="#learn">Learn</a>
-        <a href="#protocol">Protocol</a>
-        <a href="#playground">Playground</a>
-        <a href='/protocol'>Spec</a>
+        <a href="/learn">Learn</a>
+        <a href="/protocol">Protocol</a>
+        <a href="/compare">Compare</a>
+        <a href="/journal">Journal</a>
+        <a href="https://routing.dnxroute.com">Demo</a>
+        <a href="https://github.com/Xbitium/DNX">GitHub</a>
       </nav>
     </div>
   </header>
 
   <main>
     <section class="hero wrap">
-      <p class="eyebrow">Experimental networking project</p>
+      <p class="eyebrow">Experimental networking protocol</p>
       <h1>The domain is the network.</h1>
       <p class="lead"><strong>Names, not numbers. Identity, not assumptions.</strong> Built on today's Internet. Designed for tomorrow's.</p>
       <p class="lead">DNX is an experimental protocol in which your namespace hierarchy becomes the routing topology — routers forward on names, and every reply is verifiable against the key that owns that name.</p>
       <div class="actions">
-        <a class='btn primary' href='/protocol'>Read the protocol</a>
-        <a class="btn" href="#why">Why DNX?</a>
-      </div>
-      <div class="hero-panel">
-        <div class="panel-title">The shift</div>
-        <pre>Today:  name → DNS → IP → destination
-DNX:    name → identity → destination</pre>
+        <a class="btn primary" href="/protocol">Read the protocol</a>
+        <a class="btn" href="https://routing.dnxroute.com">See it route, live</a>
       </div>
     </section>
 
-    <section id="why" class="wrap section-grid">
-      <div>
-        <p class="eyebrow">Why DNX?</p>
-        <h2>The Internet is full of workarounds.</h2>
-        <p>DNS, NAT, VPNs, firewalls, and zero-trust layers all solve problems that the network itself does not understand. DNX explores a simpler model: identity at the addressing layer.</p>
+    <!-- ============ HOW IT WORKS ============ -->
+    <section class="wrap section">
+      <p class="eyebrow">How DNX works</p>
+      <h2>A name becomes a route.</h2>
+      <div class="prose">
+        <p>Today a name is a lookup key: DNS turns it into an address, and the address does the real work. DNX removes that translation step. The name <em>is</em> the routing information, and the key bound to it is the proof of who answered.</p>
       </div>
-      <div class="card">
-        <h3>The idea</h3>
-        <ul>
-          <li>The network should recognize names.</li>
-          <li>Ownership should be cryptographic.</li>
-          <li>Deployment should be incremental.</li>
-        </ul>
+
+      <figure class="diagram">
+        <svg viewBox="0 0 920 210" role="img" aria-label="A human name resolves at the registry into a key, a locator path, and a live endpoint.">
+          <text class="svg-sub" x="12" y="42">YOU TYPE</text>
+          <rect class="svg-box" x="10" y="54" width="232" height="66" />
+          <text class="svg-strong" x="26" y="86">host1.dnx</text>
+          <text class="svg-strong" x="26" y="104">.dnxroute.com</text>
+
+          <path class="svg-arrow" d="M250,88 L296,88" marker-end="url(#ar)" />
+          <defs>
+            <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M1 1 L9 5 L1 9" fill="none" stroke="#0f5f68" stroke-width="1.6" />
+            </marker>
+          </defs>
+
+          <text class="svg-sub" x="306" y="42">REGISTRY RESOLVES</text>
+          <rect class="svg-box-accent" x="304" y="54" width="180" height="66" />
+          <text class="svg-strong" x="322" y="86">registry</text>
+          <text class="svg-sub" x="322" y="104">seconds-fresh, signed</text>
+
+          <path class="svg-arrow" d="M492,88 L538,88" marker-end="url(#ar)" />
+
+          <text class="svg-sub" x="548" y="42">YOU GET BACK</text>
+          <rect class="svg-box" x="546" y="54" width="364" height="66" />
+          <text class="svg-label" x="562" y="76">ed25519 key   <tspan class="svg-sub">who owns the name</tspan></text>
+          <text class="svg-label" x="562" y="94">locator path  <tspan class="svg-sub">how to route toward it</tspan></text>
+          <text class="svg-label" x="562" y="112">live endpoint <tspan class="svg-sub">where it is right now</tspan></text>
+
+          <rect class="svg-box-dim" x="10" y="150" width="900" height="46" />
+          <text class="svg-sub" x="26" y="178">No IP is ever typed, configured, or displayed. It still exists underneath — see the stack below.</text>
+        </svg>
+        <figcaption>Resolution returns three things, not one. DNS gives you an address; DNX gives you an address, an identity, and a route.</figcaption>
+      </figure>
+
+      <ol class="steps">
+        <li><b>Register.</b> A node generates an ed25519 keypair on first boot and binds it to a fully-qualified domain at the registry. The key is the machine; the name is its handle. First key to claim a name owns it.</li>
+        <li><b>Resolve.</b> Asking for a name returns its public key, its routing locator, and its live endpoint — refreshed by heartbeat every 15 seconds, not cached for hours.</li>
+        <li><b>Rendezvous.</b> The registry introduces the two nodes so both fire packets outward at the same moment, opening each NAT from the inside. No port forwarding, no VPN, no router configuration.</li>
+        <li><b>Handshake.</b> An X25519 exchange, signed by the ed25519 identity the registry bound to the name. The session key is therefore provably owned by whoever owns the name — and it is discarded every five minutes.</li>
+        <li><b>Route.</b> Packets are forwarded hop by hop on the name hierarchy itself. Each router reads exactly one level and passes it on; none reads the whole name, and none can read the payload.</li>
+      </ol>
+    </section>
+
+    <!-- ============ THE STACK ============ -->
+    <section class="wrap section">
+      <p class="eyebrow">Architecture</p>
+      <h2>Where DNX sits.</h2>
+      <div class="prose">
+        <p>DNX is an overlay, deliberately. It runs on UDP/IP today for the same reason IP first ran over the phone network: the on-ramp matters more than the purity. Everything above the substrate line is DNX's own.</p>
+      </div>
+
+      <figure class="diagram">
+        <svg viewBox="0 0 760 336" role="img" aria-label="The DNX layer stack from application down to UDP and IP.">
+          <rect class="svg-box" x="150" y="8" width="420" height="52" />
+          <text class="svg-strong" x="172" y="32">Application</text>
+          <text class="svg-sub" x="172" y="50">ssh · http · anything that speaks TCP</text>
+          <text class="svg-sub" x="586" y="40">unmodified</text>
+
+          <rect class="svg-box-accent" x="150" y="68" width="420" height="52" />
+          <text class="svg-strong" x="172" y="92">DNX Stream</text>
+          <text class="svg-sub" x="172" y="110">sequencing · ACKs · retransmit · flow control</text>
+          <text class="svg-accent" x="586" y="100">v0.2</text>
+
+          <rect class="svg-box-accent" x="150" y="128" width="420" height="52" />
+          <text class="svg-strong" x="172" y="152">DNX Session</text>
+          <text class="svg-sub" x="172" y="170">X25519 handshake · ChaCha20-Poly1305 · 5-min rekey</text>
+          <text class="svg-accent" x="586" y="160">v0.2</text>
+
+          <rect class="svg-box-accent" x="150" y="188" width="420" height="52" />
+          <text class="svg-strong" x="172" y="212">DNX Locator</text>
+          <text class="svg-sub" x="172" y="230">forwarding on the name hierarchy · aggregation</text>
+          <text class="svg-accent" x="586" y="220">v0.3</text>
+
+          <rect class="svg-box-dim" x="150" y="248" width="420" height="52" />
+          <text class="svg-label" x="172" y="272">UDP / IP</text>
+          <text class="svg-sub" x="172" y="290">today's Internet — the substrate</text>
+          <text class="svg-sub" x="586" y="280">borrowed</text>
+
+          <path class="svg-line" d="M140,240 L60,240 L60,34 L140,34" />
+          <text class="svg-sub" x="14" y="130">D</text>
+          <text class="svg-sub" x="14" y="146">N</text>
+          <text class="svg-sub" x="14" y="162">X</text>
+
+          <text class="svg-sub" x="150" y="322">Each layer knows only the one beneath it. Swap the substrate later without touching the layers above.</text>
+        </svg>
+        <figcaption>The honest picture: DNX owns identity, encryption, reliability and routing. It borrows packet delivery from IP — for now.</figcaption>
+      </figure>
+    </section>
+
+    <!-- ============ ROUTING ============ -->
+    <section class="wrap section">
+      <p class="eyebrow">Routing</p>
+      <h2>Each hop reads one level.</h2>
+      <div class="prose">
+        <p>This is the part that has to scale, and the reason it can: a router never reads a whole name. It reads the single level it is responsible for, forwards, and forgets the rest. A core router therefore holds one entry per top-level domain — not one per host.</p>
+      </div>
+
+      <figure class="diagram">
+        <svg viewBox="0 0 920 300" role="img" aria-label="Four routers each reading one level of the name hierarchy in turn.">
+          <text class="svg-sub" x="10" y="22">THE DESTINATION, LEVEL BY LEVEL</text>
+          <rect class="svg-box" x="10" y="32" width="215" height="46" />
+          <text class="svg-strong" x="26" y="52">.com</text>
+          <text class="svg-sub" x="26" y="70">top level</text>
+
+          <rect class="svg-box" x="235" y="32" width="215" height="46" />
+          <text class="svg-strong" x="251" y="52">dnxroute</text>
+          <text class="svg-sub" x="251" y="70">domain</text>
+
+          <rect class="svg-box" x="460" y="32" width="215" height="46" />
+          <text class="svg-strong" x="476" y="52">dnx</text>
+          <text class="svg-sub" x="476" y="70">subdomain</text>
+
+          <rect class="svg-box" x="685" y="32" width="215" height="46" />
+          <text class="svg-strong" x="701" y="52">host1</text>
+          <text class="svg-sub" x="701" y="70">host</text>
+
+          <path class="svg-arrow" d="M117,150 L117,84" stroke-dasharray="4 3" marker-end="url(#ar)" />
+          <path class="svg-arrow" d="M342,150 L342,84" stroke-dasharray="4 3" marker-end="url(#ar)" />
+          <path class="svg-arrow" d="M567,150 L567,84" stroke-dasharray="4 3" marker-end="url(#ar)" />
+          <path class="svg-arrow" d="M792,150 L792,84" stroke-dasharray="4 3" marker-end="url(#ar)" />
+
+          <rect class="svg-box-accent" x="10" y="156" width="215" height="56" />
+          <text class="svg-strong" x="26" y="180">core</text>
+          <text class="svg-sub" x="26" y="198">reads the top level only</text>
+
+          <rect class="svg-box-accent" x="235" y="156" width="215" height="56" />
+          <text class="svg-strong" x="251" y="180">domain gateway</text>
+          <text class="svg-sub" x="251" y="198">reads the domain only</text>
+
+          <rect class="svg-box-accent" x="460" y="156" width="215" height="56" />
+          <text class="svg-strong" x="476" y="180">site router</text>
+          <text class="svg-sub" x="476" y="198">reads the subdomain only</text>
+
+          <rect class="svg-box-accent" x="685" y="156" width="215" height="56" />
+          <text class="svg-strong" x="701" y="180">leaf switch</text>
+          <text class="svg-sub" x="701" y="198">delivers to the host</text>
+
+          <path class="svg-arrow" d="M225,184 L233,184" marker-end="url(#ar)" />
+          <path class="svg-arrow" d="M450,184 L458,184" marker-end="url(#ar)" />
+          <path class="svg-arrow" d="M675,184 L683,184" marker-end="url(#ar)" />
+
+          <rect class="svg-box-dim" x="10" y="234" width="890" height="52" />
+          <text class="svg-sub" x="26" y="256">The core's entire forwarding table is one entry per top-level domain. Add a million hosts under</text>
+          <text class="svg-sub" x="26" y="274">dnxroute.com and that table does not grow by a single line. This is what makes it scale.</text>
+        </svg>
+        <figcaption>Aggregation is not an optimisation — it is the load-bearing wall. IP gets it from numeric prefixes; DNX gets it from the name tree.</figcaption>
+      </figure>
+
+      <div class="callout">
+        <div class="t">Try it yourself</div>
+        <p>A packet routing across two datacenters, hop by hop, purely by name — with the real forwarding trace streamed back live from both machines: <a href="https://routing.dnxroute.com">routing.dnxroute.com</a></p>
       </div>
     </section>
 
-    <section id="learn" class="wrap section-grid">
-      <div>
-        <p class="eyebrow">Learn</p>
-        <h2>Short lessons, not a wall of text.</h2>
-        <p>We are building the site like a developer portal: concise explanations, diagrams, and hands-on examples.</p>
+    <!-- ============ STATUS ============ -->
+    <section class="wrap section">
+      <p class="eyebrow">Status</p>
+      <h2>What actually runs today.</h2>
+      <div class="prose">
+        <p>DNX is an experiment, not a product. Below is the honest split between what is implemented and deployed, and what is still specification.</p>
       </div>
-      <div class="card">
-        <h3>Start here</h3>
-        <ol>
-          <li>Why IP exists</li>
-          <li>Why DNS exists</li>
-          <li>Why NAT exists</li>
-          <li>How DNX works</li>
-        </ol>
+
+      <table class="spec">
+        <thead><tr><th>Capability</th><th>State</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td>Name → key registry</td><td><span class="badge live">Live</span></td><td>First-come-first-served binding, signed heartbeats, seconds-fresh records</td></tr>
+          <tr><td>NAT traversal</td><td><span class="badge live">Live</span></td><td>Proven cloud → residential NAT with zero router configuration</td></tr>
+          <tr><td>Encrypted sessions</td><td><span class="badge live">Live</span></td><td>X25519 + ChaCha20-Poly1305, forward secrecy on a 5-minute rekey</td></tr>
+          <tr><td>Name-hierarchical routing</td><td><span class="badge live">Live</span></td><td>Distributed routers across two datacenters, forwarding by name level</td></tr>
+          <tr><td>Reliable streams</td><td><span class="badge draft">Built</span></td><td>Sequencing, ACKs, retransmit, flow control — tested, not yet deployed</td></tr>
+          <tr><td>TCP tunnelling</td><td><span class="badge draft">Built</span></td><td>Real HTTP carried over DNX in the lab; deployment pending</td></tr>
+          <tr><td>Signed registry replies</td><td><span class="badge">Planned</span></td><td>A known gap — see the protocol's security section</td></tr>
+          <tr><td>Registry federation</td><td><span class="badge">Planned</span></td><td>Today the registry is a single point of failure and of control</td></tr>
+        </tbody>
+      </table>
+
+      <div class="callout warn">
+        <div class="t">Do not deploy this in production</div>
+        <p>DNX is a research prototype with documented weaknesses, an unaudited implementation, and a wire format that will change. It is published so the design can be argued with, not so it can be relied upon.</p>
       </div>
     </section>
 
-    <section id="protocol" class="wrap section-grid">
-      <div>
-        <p class="eyebrow">Protocol</p>
-        <h2>A live specification, written in the open.</h2>
-        <p>The specification starts with a vision document, then grows into architecture, packet format, security, routing, and transport chapters.</p>
-      </div>
-      <div class="card">
-        <h3>Documents</h3>
-        <ul>
-          <li>Manifesto</li>
-          <li>Architecture</li>
-          <li>Packet format</li>
-          <li>Security model</li>
-          <li>NAT traversal</li>
-        </ul>
+    <!-- ============ WHY ============ -->
+    <section class="wrap section">
+      <p class="eyebrow">Why DNX exists</p>
+      <h2>The Internet is full of workarounds.</h2>
+      <div class="grid-2">
+        <div class="prose">
+          <p>Almost every layer we bolt onto networking exists to recover something the network itself does not know. NAT exists because addresses ran out. VPNs exist because NAT broke reachability. TLS exists because an address proves nothing about who answered. DNS exists because numbers are unusable by people.</p>
+          <p>Each of these works. Together they mean a modern connection is a stack of compensations, and the network still cannot answer the simplest question: <strong>who is this?</strong></p>
+          <p>DNX asks what happens if identity lives at the addressing layer instead of above it.</p>
+        </div>
+        <div class="card">
+          <h3>What that changes</h3>
+          <ul>
+            <li>A reply proves the <em>name's owner</em> answered — not merely that an address responded.</li>
+            <li>A machine behind a home router is as reachable as a datacenter server, with no configuration.</li>
+            <li>Records go stale in seconds, not TTL hours.</li>
+            <li>Moving a host does not invalidate the routes above it.</li>
+          </ul>
+        </div>
       </div>
     </section>
 
-    <section id="playground" class="wrap section-grid">
-      <div>
-        <p class="eyebrow">Playground</p>
-        <h2>Make the protocol visible.</h2>
-        <p>We will add tools for packet building, packet decoding, namespace exploration, and routing simulations.</p>
-      </div>
-      <div class="card">
-        <h3>Planned tools</h3>
-        <ul>
-          <li>Packet Builder</li>
-          <li>Packet Decoder</li>
-          <li>Routing Visualizer</li>
-          <li>Registry Explorer</li>
-        </ul>
+    <!-- ============ READ NEXT ============ -->
+    <section class="wrap section">
+      <p class="eyebrow">Read next</p>
+      <h2>Go deeper.</h2>
+      <div class="grid-3">
+        <div class="card">
+          <h3><a href="/protocol">The protocol</a></h3>
+          <p>Wire format, identity model, forwarding algorithm, and a security section that lists its own weaknesses.</p>
+        </div>
+        <div class="card">
+          <h3><a href="/compare">Why not DNS, WireGuard, or libp2p?</a></h3>
+          <p>Honest comparisons, including the cases where the existing tool is simply the better answer.</p>
+        </div>
+        <div class="card">
+          <h3><a href="/journal">Engineering journal</a></h3>
+          <p>Design decisions and the bugs behind them — including a routing loop and a deadlock caught before they shipped.</p>
+        </div>
       </div>
     </section>
   </main>
 
   <footer class="wrap footer">
-    <span>DNXRoute</span>
-    <span>Open source, experimental, and built in public.</span>
+    <span>DNXRoute · Domain Native eXchange</span>
+    <span>Open source, experimental, and built in public · <a href="https://github.com/Xbitium/DNX">GitHub</a></span>
   </footer>
 </body>
 </html>

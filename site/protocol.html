@@ -3,78 +3,334 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>DNX Protocol Specification v0.1</title>
-  <meta name="description" content="DNX protocol specification: architecture, identity model, packet flow, registration, NAT traversal, and roadmap." />
+  <title>DNX Protocol Specification — DNXRoute</title>
+  <meta name="description" content="The DNX protocol specification: identity model, wire formats, session handshake, stream layer, name-hierarchical routing, and a candid account of known weaknesses." />
   <meta name="theme-color" content="#0f5f68" />
+  <link rel="canonical" href="https://dnxroute.com/protocol" />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css" />
-  <style>
-    main{padding:42px 0 72px}.doc{max-width:900px;margin:0 auto;padding:0 24px}.doc h1{font-family:'Archivo',sans-serif;font-size:clamp(2.2rem,5vw,3.6rem);line-height:1.04;letter-spacing:-.03em;margin:10px 0 12px}.doc h2{margin-top:44px;font-family:'Archivo',sans-serif;font-size:1.65rem}.doc h3{font-family:'Archivo',sans-serif;font-size:1.15rem}.doc p,.doc li{color:var(--muted);font-size:1.02rem;line-height:1.75}.doc code{font-family:'IBM Plex Mono',monospace;background:var(--panel);border:1px solid var(--border);padding:1px 6px}.callout{border-left:4px solid var(--accent);background:var(--panel);padding:16px 18px;margin:18px 0 24px;border:1px solid var(--border)}pre{background:#0c1614;color:#9fe8c2;padding:18px;border:1px solid #1e2e29;overflow:auto}.meta{font-family:'IBM Plex Mono',monospace;font-size:.85rem;color:var(--accent);text-transform:uppercase;letter-spacing:.14em}</style>
 </head>
 <body>
   <header class="topbar">
     <div class="wrap topbar-inner">
       <div>
-        <div class="kicker">DNX</div>
-        <div class="muted">Protocol Specification</div>
+        <div class="kicker"><a href="/">DNXRoute</a></div>
+        <div class="muted">Protocol specification · working draft</div>
       </div>
       <nav class="nav">
-        <a href='/'>Home</a>
-        <a href="#overview">Overview</a>
-        <a href="#architecture">Architecture</a>
-        <a href="#security">Security</a>
-        <a href="#roadmap">Roadmap</a>
+        <a href="/learn">Learn</a>
+        <a href="/protocol">Protocol</a>
+        <a href="/compare">Compare</a>
+        <a href="/journal">Journal</a>
+        <a href="https://routing.dnxroute.com">Demo</a>
+        <a href="https://github.com/Xbitium/DNX">GitHub</a>
       </nav>
     </div>
   </header>
-  <main>
-    <div class="doc">
-      <p class="meta">Working draft · v0.1</p>
-      <h1>DNX Protocol Specification</h1>
-      <p>DNX is an experimental identity-native overlay protocol. It explores whether names can become the network interface humans and applications interact with, while existing Internet transport carries the packets underneath.</p>
 
-      <section id="overview">
-        <h2>1. Overview</h2>
-        <p>Traditional networking separates naming, routing, and identity. DNX combines those concerns around a cryptographically bound namespace. A machine registers a human-readable name, binds that name to a keypair, and uses the resulting identity to rendezvous with other nodes.</p>
-        <div class="callout">DNX v0.1 is an overlay. It runs over existing IP networks and does not require new routers or a new physical network.</div>
+  <div class="wrap doc">
+    <aside class="toc">
+      <div class="toc-title">Contents</div>
+      <a href="#overview">1 · Overview</a>
+      <a href="#identity">2 · Identity</a>
+      <a href="#registry">3 · The registry</a>
+      <a href="#traversal">4 · NAT traversal</a>
+      <a href="#session">5 · Session layer</a>
+      <a href="#stream">6 · Stream layer</a>
+      <a href="#routing">7 · Routing</a>
+      <a href="#wire">8 · Wire formats</a>
+      <a href="#security">9 · Security</a>
+      <a href="#constants">10 · Constants</a>
+      <a href="#roadmap">11 · Roadmap</a>
+    </aside>
+
+    <main>
+      <p class="eyebrow">Working draft · v0.2 implemented, v0.3 partial</p>
+      <h1 style="font-family:Archivo,sans-serif;font-size:clamp(2rem,5vw,3.2rem);line-height:1.08;letter-spacing:-.02em;margin:.2rem 0 1rem">DNX Protocol Specification</h1>
+      <div class="prose">
+        <p>This document describes running code. Every implemented claim corresponds to something in the <a href="https://github.com/Xbitium/DNX">reference implementation</a>; everything not yet built is marked as specification or future work. Where this document and the code disagree, the code is the bug.</p>
+      </div>
+
+      <!-- 1 -->
+      <section id="overview" class="section" style="border-top:none;padding-left:0;padding-right:0">
+        <h2>1 · Overview</h2>
+        <div class="prose">
+          <p>DNX is a name-native overlay protocol. A machine is identified by a fully-qualified domain name bound to an ed25519 keypair; packets are routed by walking that name's hierarchy; and every session is encrypted with keys that are provably owned by whoever owns the name.</p>
+          <p><strong>Goals.</strong> Names are the only addresses humans or applications touch. Identity is native to the addressing layer, not bolted above it. A machine behind an unconfigured NAT is as reachable as a public server. Records are fresh in seconds.</p>
+          <p><strong>Non-goals.</strong> DNX does not replace IP forwarding. Packets are UDP/IP datagrams moved by existing infrastructure; DNX makes the numeric layer invisible rather than absent. Name-native forwarding in hardware is a target architecture, not a current claim.</p>
+        </div>
+        <div class="callout">
+          <div class="t">Design rule</div>
+          <p>We build the protocol; we never build the cryptographic primitives. All primitives come from audited implementations. The novel work is the state machine and how it inherits name-to-key trust.</p>
+        </div>
       </section>
 
-      <section id="architecture">
-        <h2>2. Architecture</h2>
-        <h3>Components</h3>
-        <ul>
-          <li><strong>Registry</strong> — maintains live name bindings and coordinates rendezvous.</li>
-          <li><strong>Node agent</strong> — holds the identity key and handles heartbeats and peer traffic.</li>
-          <li><strong>CLI</strong> — exposes local controls for registration, ping, and diagnostics.</li>
-        </ul>
-        <h3>Flow</h3>
-        <pre>node → registry: REGISTER
-node → registry: RESOLVE
-registry → peer: INTRO / PUNCH
-peer ↔ peer: PING / PONG</pre>
+      <!-- 2 -->
+      <section id="identity" class="section" style="padding-left:0;padding-right:0">
+        <h2>2 · Identity</h2>
+        <div class="prose">
+          <p>On first boot a node generates an ed25519 keypair. <strong>The keypair is the machine.</strong> The domain name is a human-readable handle that the registry binds to that key, first-come-first-served. Steal the name without the key and you are nobody: every control message and every reply is signed.</p>
+          <p>The private key is written to <code>~/.dnx/identity.json</code> with mode <code>0600</code> and never leaves the host. Only public keys and signatures cross the wire.</p>
+        </div>
+
+        <figure class="diagram">
+          <svg viewBox="0 0 900 250" role="img" aria-label="The chain of trust from registry binding through handshake signature to session key.">
+            <defs>
+              <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                <path d="M1 1 L9 5 L1 9" fill="none" stroke="#0f5f68" stroke-width="1.6" />
+              </marker>
+            </defs>
+            <rect class="svg-box-accent" x="10" y="20" width="270" height="62" />
+            <text class="svg-strong" x="28" y="46">registry binds</text>
+            <text class="svg-sub" x="28" y="66">name → ed25519 public key</text>
+
+            <path class="svg-arrow" d="M145,90 L145,124" marker-end="url(#a2)" />
+            <text class="svg-sub" x="158" y="112">the name's owner is now defined</text>
+
+            <rect class="svg-box-accent" x="10" y="132" width="270" height="62" />
+            <text class="svg-strong" x="28" y="158">that key signs</text>
+            <text class="svg-sub" x="28" y="178">an ephemeral X25519 key</text>
+
+            <path class="svg-arrow" d="M288,163 L340,163" marker-end="url(#a2)" />
+
+            <rect class="svg-box" x="348" y="132" width="270" height="62" />
+            <text class="svg-strong" x="366" y="158">X25519 → HKDF</text>
+            <text class="svg-sub" x="366" y="178">directional session keys</text>
+
+            <path class="svg-arrow" d="M626,163 L678,163" marker-end="url(#a2)" />
+
+            <rect class="svg-box" x="686" y="132" width="204" height="62" />
+            <text class="svg-strong" x="704" y="158">sealed traffic</text>
+            <text class="svg-sub" x="704" y="178">ChaCha20-Poly1305</text>
+
+            <rect class="svg-box-dim" x="348" y="20" width="542" height="62" />
+            <text class="svg-sub" x="368" y="46">Result: only the machine that owns the NAME can derive the session key.</text>
+            <text class="svg-sub" x="368" y="66">The registry never sees it. It is a phone book, not a key escrow.</text>
+          </svg>
+          <figcaption>Encryption inherits name-identity for free. Nothing new has to be trusted.</figcaption>
+        </figure>
       </section>
 
-      <section id="identity">
-        <h2>3. Identity model</h2>
-        <p>Every node generates a keypair. The public key is associated with a name in the registry. The private key never leaves the node. A verified response proves that the machine reached the owner of the name, not just any machine at an address.</p>
+      <!-- 3 -->
+      <section id="registry" class="section" style="padding-left:0;padding-right:0">
+        <h2>3 · The registry</h2>
+        <div class="prose">
+          <p>The registry is a living name table: it maps a name to its public key and its currently observed endpoint. Think of it as DNS that updates in seconds and answers with identity attached.</p>
+          <p>Every node sends a signed <code>REGISTER</code> every 15 seconds — chosen to sit under typical NAT UDP mapping timeouts. The registry verifies the signature, enforces the binding rule, and records <em>the source address it observed on the datagram</em>.</p>
+        </div>
+        <div class="callout">
+          <div class="t">A node never states where it is</div>
+          <p>The endpoint is not asserted by the node — it is observed by the registry from the packet's own source address, and is deliberately excluded from the signature. A node therefore cannot lie about its location, because it never claims one.</p>
+        </div>
+        <div class="prose">
+          <p>Records unseen for 60 seconds are treated as offline; unseen for ten times that, they are pruned. A <code>REGISTER</code> for an already-bound name under a different key is rejected regardless of signature validity — possession of a name requires possession of its key.</p>
+        </div>
       </section>
 
-      <section id="security">
-        <h2>4. Security</h2>
-        <p>DNX authenticates nodes with signatures and timestamps. v0.1 is explicit about its limits: payload confidentiality is not yet provided, registry responses need hardening, and symmetric NAT remains a future improvement area.</p>
+      <!-- 4 -->
+      <section id="traversal" class="section" style="padding-left:0;padding-right:0">
+        <h2>4 · NAT traversal</h2>
+        <div class="prose">
+          <p>NATs were never really blocking inbound traffic — they were blocking <em>unexpected</em> inbound traffic. DNX makes every connection expected at both ends simultaneously.</p>
+        </div>
+
+        <figure class="diagram">
+          <svg viewBox="0 0 900 260" role="img" aria-label="Node A asks the registry to introduce it to node B; both fire packets outward, opening their own NATs.">
+            <defs>
+              <marker id="a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                <path d="M1 1 L9 5 L1 9" fill="none" stroke="#0f5f68" stroke-width="1.6" />
+              </marker>
+            </defs>
+            <rect class="svg-box-accent" x="330" y="10" width="240" height="52" />
+            <text class="svg-strong" x="352" y="34">registry</text>
+            <text class="svg-sub" x="352" y="52">matchmaker only — then it steps out</text>
+
+            <rect class="svg-box" x="10" y="150" width="200" height="56" />
+            <text class="svg-strong" x="30" y="174">node A</text>
+            <text class="svg-sub" x="30" y="192">behind NAT A</text>
+
+            <rect class="svg-box" x="690" y="150" width="200" height="56" />
+            <text class="svg-strong" x="710" y="174">node B</text>
+            <text class="svg-sub" x="710" y="192">behind NAT B</text>
+
+            <path class="svg-arrow" d="M150,146 L330,68" marker-end="url(#a3)" />
+            <text class="svg-sub" x="176" y="106">1 · introduce me to B</text>
+
+            <path class="svg-arrow" d="M570,68 L750,146" marker-end="url(#a3)" />
+            <text class="svg-sub" x="596" y="106">2 · A is knocking, from here</text>
+
+            <path class="svg-arrow" d="M216,170 L684,170" marker-end="url(#a3)" />
+            <path class="svg-arrow" d="M684,192 L216,192" marker-end="url(#a3)" />
+            <text class="svg-sub" x="352" y="228">3 · both fire outward at once — each NAT opens from the inside</text>
+          </svg>
+          <figcaption>Every DNX path is initiated outbound from both ends, which is why a fully firewalled node with no inbound rules is still reachable by name.</figcaption>
+        </figure>
+
+        <div class="prose">
+          <p>This succeeds against full-cone and port-restricted NATs. <strong>Symmetric NATs</strong>, which allocate a fresh mapping per destination, defeat simple punching; relayed fallback is specified but not yet built.</p>
+        </div>
       </section>
 
-      <section id="roadmap">
-        <h2>5. Roadmap</h2>
-        <ul>
-          <li>v0.2 — signed registry responses and encrypted channels</li>
-          <li>v0.3 — relays for hard NAT scenarios and federation</li>
-          <li>v1.0 — compact binary framing and broader tooling</li>
-        </ul>
+      <!-- 5 -->
+      <section id="session" class="section" style="padding-left:0;padding-right:0">
+        <h2>5 · Session layer</h2>
+        <div class="prose">
+          <p>Two messages, roughly one round trip:</p>
+        </div>
+        <pre class="code"><code>A → B   HS_INIT  { ephA_pub, nonce_A, ts, sig_A }      <span class="c">signed by A's ed25519</span>
+A ← B   HS_RESP  { ephB_pub, nonce_A, nonce_B, sig_B } <span class="c">signed by B's ed25519</span>
+
+both:   shared = X25519(eph_priv, peer_eph_pub)
+        keys   = HKDF-SHA256(shared,
+                             salt = nonce_A || nonce_B,
+                             info = direction label)</code></pre>
+        <div class="prose">
+          <p>Echoing <code>nonce_A</code> in the response binds it to this exact handshake. Each side derives <strong>directional</strong> keys, so the two flows never share a nonce space and both may count from zero safely.</p>
+          <p><strong>Forward secrecy.</strong> The X25519 keys are ephemeral and discarded on rekey every five minutes. Compromising a machine's long-term identity key tomorrow does not decrypt traffic captured today.</p>
+          <p>The signature covers a canonical string that includes a domain-separation tag, both names, the ephemeral key, both nonces and the timestamp — so an <code>HS_INIT</code> signature can never be replayed as an <code>HS_RESP</code>.</p>
+        </div>
       </section>
-    </div>
-  </main>
+
+      <!-- 6 -->
+      <section id="stream" class="section" style="padding-left:0;padding-right:0">
+        <h2>6 · Stream layer</h2>
+        <div class="prose">
+          <p>DNX must run on UDP for NAT traversal, so something has to put reliability back. The stream layer is deliberately TCP-shaped, because TCP's shape is correct:</p>
+          <ul>
+            <li><strong>Byte-offset sequence numbers</strong>, so segment boundaries may change on retransmit.</li>
+            <li><strong>Cumulative acknowledgement</strong> — "I have everything below N".</li>
+            <li><strong>RTO estimation</strong> with smoothed RTT and variance, plus exponential backoff, and RTT samples taken only from segments that were never retransmitted.</li>
+            <li><strong>Receiver-advertised window</strong> for flow control, with a persist timer that probes a closed window.</li>
+            <li><strong>Slow start and congestion avoidance</strong>, halving on loss.</li>
+          </ul>
+          <p><strong>Deliberately omitted in v0.2:</strong> selective acknowledgement, fast retransmit on duplicate ACKs, path MTU discovery, and window scaling. Loss recovery is timeout-driven — correct, but slower than TCP on lossy paths.</p>
+        </div>
+        <div class="callout">
+          <div class="t">Why the persist timer matters</div>
+          <p>If a receiver's window closes and the acknowledgement that later reopens it is lost, both sides wait forever: the receiver believes it announced space, the sender waits to be told. A zero-window probe breaks the stalemate. This deadlock was found by a test written specifically to provoke it — see the <a href="/journal">journal</a>.</p>
+        </div>
+      </section>
+
+      <!-- 7 -->
+      <section id="routing" class="section" style="padding-left:0;padding-right:0">
+        <h2>7 · Routing</h2>
+        <div class="prose">
+          <p>IP forwards by longest-<em>prefix</em> match over numeric addresses. DNX forwards by walking the name hierarchy from the coarsest level inward. Each router holds a table mapping the level it owns to a next hop, and reads nothing else.</p>
+        </div>
+        <pre class="code"><code>forward(packet):
+    level = highest unresolved level of the destination
+    hop   = table.lookup(level)
+    if hop is LOCAL:   deliver
+    elif hop exists:   mark level resolved; send to hop
+    else:              no route — drop definitively</code></pre>
+        <div class="prose">
+          <p><strong>Why it scales.</strong> A router's table size is the number of distinct children it must distinguish — not the number of hosts, and not the number of allocated prefixes. The core is constant in the number of hosts: new machines appear as leaves under levels the core already knows.</p>
+          <p><strong>Authoritative failure.</strong> A router responsible for a level is authoritative for its children. If it has no route, no router closer to the root knows better, so the packet is dropped there rather than being sent back up. Ascending would create a loop — a mistake made and corrected during development.</p>
+        </div>
+        <div class="callout warn">
+          <div class="t">Under active revision</div>
+          <p>The current implementation encodes the destination as four fixed 64-bit fields. That caps hierarchy depth at four levels, which is too rigid — <code>api.production.us-east.customer.company</code> does not fit. A variable-length namespace path is being designed to replace it.</p>
+        </div>
+      </section>
+
+      <!-- 8 -->
+      <section id="wire" class="section" style="padding-left:0;padding-right:0">
+        <h2>8 · Wire formats</h2>
+        <div class="prose">
+          <p>Three formats share one UDP socket, distinguished by their first byte. Control messages are JSON and begin with <code>{</code>; sealed frames begin <code>0xD8</code>; routed frames begin <code>0xDF</code>. This lets old and new coexist during migration.</p>
+        </div>
+
+        <h3>Control message (JSON)</h3>
+        <pre class="code"><code>{
+  "kind":     "REGISTER",              <span class="c">// verb</span>
+  "name":     "host1.dnx.dnxroute.com",
+  "pubkey":   "base64(ed25519 public)",<span class="c">// identity</span>
+  "endpoint": "203.0.113.7:44313",     <span class="c">// registry-observed, never self-asserted</span>
+  "ts":       1783312169042,           <span class="c">// unix ms, ±30s replay window</span>
+  "nonce":    "base64url(12 bytes)",
+  "sig":      "base64(ed25519 signature)"
+}</code></pre>
+
+        <h3>Sealed frame</h3>
+        <pre class="code"><code>+--------+----------------+------------------------------+
+| 0xD8   | counter (u64)  | ciphertext + 16-byte AEAD tag|
++--------+----------------+------------------------------+</code></pre>
+        <div class="prose">
+          <p>The counter doubles as the AEAD nonce, so nonces cannot repeat within a session. The header is authenticated as additional data — an attacker cannot alter it without the tag failing. A counter is accepted at most once, and only recorded <em>after</em> the tag verifies, so forged frames cannot poison the replay table.</p>
+        </div>
+
+        <h3>Stream frame (inside a sealed frame)</h3>
+        <pre class="code"><code>+------+---------+---------+---------+---------+---------+
+| type | seq u32 | ack u32 | wnd u16 | len u16 | payload |
++------+---------+---------+---------+---------+---------+</code></pre>
+
+        <h3>Routed frame</h3>
+        <pre class="code"><code>+--------+-------------------+------------------+---------+
+| 0xDF   | destination path  | levels consumed  | payload |
++--------+-------------------+------------------+---------+</code></pre>
+        <div class="prose">
+          <p>"Levels consumed" tells the receiving router which level to read next, so each hop picks up exactly where the previous one stopped. The payload is itself a sealed frame — <strong>routers forward what they cannot read.</strong></p>
+        </div>
+      </section>
+
+      <!-- 9 -->
+      <section id="security" class="section" style="padding-left:0;padding-right:0">
+        <h2>9 · Security model</h2>
+        <div class="prose">
+          <p><strong>What a verified reply proves:</strong> the responder holds the private key that the registry associates with that name. Not merely that an address answered.</p>
+          <p><strong>What it does not prove:</strong> anything about the peer's intentions, and — in the v0.1 plaintext path — anything about confidentiality.</p>
+        </div>
+
+        <h3>Known weaknesses, stated plainly</h3>
+        <table class="spec">
+          <thead><tr><th>Weakness</th><th>Consequence</th><th>Fix</th></tr></thead>
+          <tbody>
+            <tr><td>Registry replies unsigned</td><td>An on-path attacker can forge resolution answers, enabling denial of service and misdirection. It does <em>not</em> enable impersonation — a poisoned endpoint still cannot produce replies that verify against the genuine key.</td><td>Registry keypair and signed responses</td></tr>
+            <tr><td>Rendezvous cues unsigned</td><td>A spoofed cue can induce a node to emit a small burst of packets to an arbitrary address — a minor reflection primitive.</td><td>Folds into signed registry traffic</td></tr>
+            <tr><td>Single registry</td><td>A single point of failure, and a single point of control. It also observes who resolves whom.</td><td>Federation and a signed, replicated name table</td></tr>
+            <tr><td>First-come-first-served names</td><td>Nothing prevents squatting desirable names.</td><td>Delegation anchored to domain-ownership proofs</td></tr>
+            <tr><td>Symmetric NAT</td><td>Simple hole punching fails; those peers are unreachable.</td><td>Relayed fallback</td></tr>
+          </tbody>
+        </table>
+        <div class="prose">
+          <p>This list is published because a protocol that hides its weaknesses cannot be evaluated. If you find one that is not here, that is a bug in this document.</p>
+        </div>
+      </section>
+
+      <!-- 10 -->
+      <section id="constants" class="section" style="padding-left:0;padding-right:0">
+        <h2>10 · Constants</h2>
+        <table class="spec">
+          <thead><tr><th>Constant</th><th>Value</th><th>Rationale</th></tr></thead>
+          <tbody>
+            <tr><td>heartbeat</td><td>15 s</td><td>Below common ~30 s NAT UDP mapping timeout</td></tr>
+            <tr><td>offline after</td><td>60 s</td><td>Tolerates missed heartbeats before a name reads offline</td></tr>
+            <tr><td>prune after</td><td>600 s</td><td>Ten times the offline threshold</td></tr>
+            <tr><td>replay window</td><td>±30 s</td><td>Clock-skew tolerance versus replay surface</td></tr>
+            <tr><td>session rekey</td><td>5 min</td><td>Bounds the forward-secrecy window</td></tr>
+            <tr><td>max segment</td><td>1200 B</td><td>Fits under a 1500 B MTU after all DNX and IP overhead</td></tr>
+            <tr><td>retransmit timeout</td><td>200 ms – 10 s</td><td>Smoothed RTT plus variance, with exponential backoff</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <!-- 11 -->
+      <section id="roadmap" class="section" style="padding-left:0;padding-right:0">
+        <h2>11 · Roadmap</h2>
+        <div class="prose">
+          <p><strong>Next.</strong> Variable-length namespace paths replacing the fixed four-level address. Signed registry responses, which closes two of the weaknesses above at once. Deploying the stream and tunnel layers to the live network.</p>
+          <p><strong>After that.</strong> Relayed fallback for symmetric NATs. Registry federation with a signed name table. Namespace delegation anchored to existing domain ownership.</p>
+          <p><strong>Long term.</strong> Pushing name-based forwarding further down the stack, so that routers decide on names natively rather than over an IP substrate. That is a research direction, not a schedule.</p>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <footer class="wrap footer">
+    <span>DNXRoute · Protocol specification</span>
+    <span>Where this document and the code disagree, the code is the bug · <a href="https://github.com/Xbitium/DNX">GitHub</a></span>
+  </footer>
 </body>
 </html>

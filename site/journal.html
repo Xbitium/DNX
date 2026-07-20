@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Engineering Journal — DNXRoute</title>
+  <meta name="description" content="Design decisions and the bugs behind them: a routing loop, a zero-window deadlock, why DNX is an overlay, and why the fixed four-level address is being replaced." />
+  <meta name="theme-color" content="#0f5f68" />
+  <link rel="canonical" href="https://dnxroute.com/journal" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="wrap topbar-inner">
+      <div>
+        <div class="kicker"><a href="/">DNXRoute</a></div>
+        <div class="muted">Engineering journal</div>
+      </div>
+      <nav class="nav">
+        <a href="/learn">Learn</a>
+        <a href="/protocol">Protocol</a>
+        <a href="/compare">Compare</a>
+        <a href="/journal">Journal</a>
+        <a href="https://routing.dnxroute.com">Demo</a>
+        <a href="https://github.com/Xbitium/DNX">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <div class="wrap doc">
+    <aside class="toc">
+      <div class="toc-title">Entries</div>
+      <a href="#e6">0006 · Naming</a>
+      <a href="#e5">0005 · Four levels</a>
+      <a href="#e4">0004 · Deadlock</a>
+      <a href="#e3">0003 · Crypto</a>
+      <a href="#e2">0002 · Routing loop</a>
+      <a href="#e1">0001 · Overlay</a>
+    </aside>
+
+    <main>
+      <p class="eyebrow">Engineering journal</p>
+      <h1 style="font-family:Archivo,sans-serif;font-size:clamp(2rem,5vw,3.2rem);line-height:1.08;letter-spacing:-.02em;margin:.2rem 0 1rem">Decisions, and the mistakes behind them.</h1>
+      <div class="prose">
+        <p>A protocol is mostly a record of arguments someone had with themselves. These entries document why DNX is shaped the way it is — including the bugs that changed its design, which are usually more informative than the parts that worked first time.</p>
+      </div>
+
+      <article id="e6" class="entry">
+        <div class="meta">JOURNAL 0006 · 20 JULY 2026</div>
+        <h3>The tagline contradicted itself</h3>
+        <div class="prose">
+          <p>For a while the project led with <em>"Route identities, not locations. The name is the address."</em> Two lines, and they disagree: in networking an "address" <strong>is</strong> a locator, so the second line hands back exactly what the first rejects.</p>
+          <p>The deeper problem was that the first line was not even true of the implementation. DNX routing is explicitly hierarchical and location-shaped — a core router forwards on the top level, a regional router on the next, and so on. That hierarchy is the entire scaling argument. DNX does not route "identities, not locations"; it routes locations that happen to be <em>expressed as names</em>, with identity bound in cryptographically.</p>
+          <p>Marketing that the specification then has to walk back is worse than no marketing. The replacement states the actual thesis: <strong>the domain is the network</strong> — your namespace hierarchy <em>is</em> your routing topology, not a label that maps onto one.</p>
+        </div>
+        <div class="callout">
+          <div class="t">Rule extracted</div>
+          <p>If the homepage claims something the protocol document has to qualify, the homepage is wrong. Not the other way around.</p>
+        </div>
+      </article>
+
+      <article id="e5" class="entry">
+        <div class="meta">JOURNAL 0005 · 20 JULY 2026</div>
+        <h3>Four levels is not enough</h3>
+        <div class="prose">
+          <p>The current implementation encodes a destination as four fixed 64-bit fields: top level, domain, subdomain, host. It is simple, it makes every forwarding decision a fixed-offset integer comparison, and it is <strong>wrong</strong>.</p>
+          <p>It breaks on the first realistic organisation chart. <code>api.production.us-east.customer.company</code> is five levels. <code>vpn.engineering.floor3.buildingA.company</code> is five. Any protocol where adding an organisational level requires changing the packet format has a design smell, and this one has it.</p>
+          <p>The replacement under design is a variable-length path of numeric namespace identifiers, resolved by the registry, so depth is unbounded and no strings ever ride the wire.</p>
+          <p><strong>What it costs.</strong> The current pitch — "routers mask to a fixed offset, exactly what IP silicon already does" — weakens. Variable length means reading a count, then indexing. Still integer comparison, no longer constant-offset.</p>
+          <p><strong>Why it is still right.</strong> MPLS has forwarded variable-depth label stacks in hardware at line rate for two decades. The precedent already exists, and it is a much stronger foundation than a four-level limit chosen for implementation convenience.</p>
+          <p><strong>The open question</strong> is whether namespace identifiers should be globally unique or unique only within their parent. The current answer is parent-scoped: forwarding is inherently top-down, so a router only ever interprets an identifier after everything above it has already matched. That makes the context guaranteed, keeps identifiers small and dense, and lets each namespace allocate locally without any global coordination — which also happens to dissolve the objection that one organisation would control all naming.</p>
+        </div>
+      </article>
+
+      <article id="e4" class="entry">
+        <div class="meta">JOURNAL 0004 · 20 JULY 2026</div>
+        <h3>The deadlock that only appears when an acknowledgement is lost</h3>
+        <div class="prose">
+          <p>The stream layer passed every test: perfect links, multi-segment transfers, twenty per cent packet loss, reordering, duplication, all of it combined. Then a flow-control test reported something odd — the sender had blocked with <em>zero</em> bytes in flight.</p>
+          <p>That is the signature of a closed receive window: everything sent had been acknowledged into a receiver buffer that nothing was draining. Correct behaviour. But it raises a specific question: what happens when the receiver finally reads, frees space, sends the acknowledgement announcing it — <strong>and that acknowledgement is lost?</strong></p>
+          <p>The receiver believes it announced space. The sender is waiting to be told. Neither will speak again. A test was written specifically to provoke that sequence, and it deadlocked exactly as feared.</p>
+          <p>The fix is TCP's persist timer: periodically probe a closed window so the reply carries the current state. Verified by disabling the probe and confirming the test fails, then re-enabling it and confirming recovery — because a passing test proves nothing unless you have watched it fail.</p>
+        </div>
+        <div class="callout">
+          <div class="t">Rule extracted</div>
+          <p>A reliability layer is only as good as the failures you deliberately caused. Every impairment in the test harness was also checked for whether it was actually firing — an early version silently under-counted reordered packets, which would have made the tests look stronger than they were.</p>
+        </div>
+      </article>
+
+      <article id="e3" class="entry">
+        <div class="meta">JOURNAL 0003 · 19 JULY 2026</div>
+        <h3>Build the protocol, never the primitives</h3>
+        <div class="prose">
+          <p>DNX was deliberately built without borrowing an existing transport — the goal was to understand every byte. That choice has an obvious failure mode: "we rolled our own crypto" is the fastest way to lose every serious reader.</p>
+          <p>The line drawn was between <strong>protocol</strong> and <strong>mathematics</strong>. The handshake state machine, the key-derivation structure, the replay discipline, the framing — those are ours, because they are where DNX's ideas live. X25519, ChaCha20-Poly1305, HKDF and ed25519 come from audited implementations, because that is where subtle catastrophes live.</p>
+          <p>Seven security properties are asserted as tests rather than as prose: that a peer with the right name but the wrong key cannot complete a handshake; that flipping any single bit fails authentication; that a replayed frame is refused; that counters never repeat across a thousand frames; that a foreign session cannot decrypt; that sealed frames contain no plaintext. Claims about security should be executable.</p>
+        </div>
+      </article>
+
+      <article id="e2" class="entry">
+        <div class="meta">JOURNAL 0002 · 15 JULY 2026</div>
+        <h3>The routing loop that would have shipped in a figure</h3>
+        <div class="prose">
+          <p>The first routing prototype had a rule that sounded reasonable: if a router does not recognise a level, forward the packet toward the root, on the theory that something closer to the root knows more.</p>
+          <p>It does not. A packet addressed to a nonexistent site under a known authority reached the authority's router, failed to match, ascended toward the root, was sent back down to the same router, failed again — and oscillated until a hop limit killed it.</p>
+          <p>The correct rule is that <strong>a router responsible for a level is authoritative for its children</strong>. If the gateway for an authority has no route for a site beneath it, no router closer to the root knows better. The packet should be dropped there, definitively, in one hop.</p>
+          <p>This is the entire reason for building a proof of concept rather than writing a specification and calling it designed. The bug was in a diagram that was going to be published.</p>
+        </div>
+        <div class="callout warn">
+          <div class="t">Rule extracted</div>
+          <p>"Forward it upward and let someone smarter decide" is not a routing policy. It is a loop with extra steps.</p>
+        </div>
+      </article>
+
+      <article id="e1" class="entry">
+        <div class="meta">JOURNAL 0001 · 13 JULY 2026</div>
+        <h3>An overlay, deliberately</h3>
+        <div class="prose">
+          <p>The original ambition was to replace TCP/IP outright — no addresses, names all the way down. The honest technical answer is that this is not achievable as a first step, and pretending otherwise would have cost the project its credibility with exactly the people best placed to evaluate it.</p>
+          <p>IP scales because of hierarchical numeric aggregation: a backbone router stores a route to a prefix, not to every host, and matches it at line rate in dedicated silicon. Any replacement must reproduce that property. Aggregation is not an optimisation — it is the load-bearing wall.</p>
+          <p>So DNX runs on UDP/IP, and says so. The precedent is not embarrassing: IP itself first ran over the telephone network, and nobody ever removed the copper — it simply became irrelevant. Protocols do not win by being installed everywhere on day one. They win by making the layer beneath them stop mattering.</p>
+          <p>What DNX claims is narrower and more defensible than "replacing IP": that the <em>aggregation key</em> can be replaced. Keep hierarchy, change its alphabet from numeric prefixes to name levels. Geography that IP delivers by accident of allocation, DNX delivers by design of the namespace.</p>
+        </div>
+      </article>
+    </main>
+  </div>
+
+  <footer class="wrap footer">
+    <span>DNXRoute · Engineering journal</span>
+    <span>The bugs are the interesting part · <a href="https://github.com/Xbitium/DNX">GitHub</a></span>
+  </footer>
+</body>
+</html>

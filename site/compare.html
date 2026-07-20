@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Why not DNS, WireGuard, or libp2p? — DNXRoute</title>
+  <meta name="description" content="Honest comparisons between DNX and DNS, WireGuard, Tailscale, libp2p, Tor, SCION, MPLS and Named Data Networking — including the many cases where the existing tool is the better answer." />
+  <meta name="theme-color" content="#0f5f68" />
+  <link rel="canonical" href="https://dnxroute.com/compare" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="wrap topbar-inner">
+      <div>
+        <div class="kicker"><a href="/">DNXRoute</a></div>
+        <div class="muted">Comparisons</div>
+      </div>
+      <nav class="nav">
+        <a href="/learn">Learn</a>
+        <a href="/protocol">Protocol</a>
+        <a href="/compare">Compare</a>
+        <a href="/journal">Journal</a>
+        <a href="https://routing.dnxroute.com">Demo</a>
+        <a href="https://github.com/Xbitium/DNX">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <div class="wrap doc">
+    <aside class="toc">
+      <div class="toc-title">Contents</div>
+      <a href="#short">The short answer</a>
+      <a href="#dns">DNS + IP</a>
+      <a href="#wireguard">WireGuard</a>
+      <a href="#tailscale">Tailscale · ZeroTier</a>
+      <a href="#libp2p">libp2p</a>
+      <a href="#tor">Tor · I2P</a>
+      <a href="#scion">SCION</a>
+      <a href="#ndn">Named Data Networking</a>
+      <a href="#mpls">MPLS</a>
+      <a href="#idloc">ILNP · LISP · HIP</a>
+      <a href="#honest">What's actually new</a>
+    </aside>
+
+    <main>
+      <p class="eyebrow">Comparisons</p>
+      <h1 style="font-family:Archivo,sans-serif;font-size:clamp(2rem,5vw,3.2rem);line-height:1.08;letter-spacing:-.02em;margin:.2rem 0 1rem">Why not just use something that already works?</h1>
+      <div class="prose">
+        <p>It is the right question, and for most real problems today the answer is: you should. DNX is a research prototype. The tools below are mature, audited, and deployed at scale. This page exists to be specific about where DNX differs, and honest about where it simply loses.</p>
+      </div>
+
+      <section id="short" class="section" style="border-top:none;padding-left:0;padding-right:0">
+        <h2>The short answer</h2>
+        <table class="spec">
+          <thead><tr><th>If you want…</th><th>Use</th></tr></thead>
+          <tbody>
+            <tr><td>A private network that works today</td><td>WireGuard, or Tailscale if you want it managed</td></tr>
+            <tr><td>Peer-to-peer application plumbing</td><td>libp2p</td></tr>
+            <tr><td>Anonymity</td><td>Tor</td></tr>
+            <tr><td>Path control between networks</td><td>SCION</td></tr>
+            <tr><td>Content-addressed distribution</td><td>Named Data Networking, or IPFS</td></tr>
+            <tr><td>To argue about how addressing should work</td><td>DNX</td></tr>
+          </tbody>
+        </table>
+        <div class="callout">
+          <div class="t">The one-line difference</div>
+          <p>Everything below treats the name as a lookup key that resolves to a locator. DNX treats the <strong>name hierarchy itself as the routing topology</strong> — and binds identity into the address rather than layering it above.</p>
+        </div>
+      </section>
+
+      <section id="dns" class="section" style="padding-left:0;padding-right:0">
+        <h2>DNS + IP</h2>
+        <div class="prose">
+          <p><strong>What it does.</strong> DNS maps names to addresses; IP routes the addresses. It is the most successful naming system ever built, and it is not going anywhere.</p>
+          <p><strong>Where DNX differs.</strong> DNS <em>resolves</em>; it does not <em>forward</em>. The moment a name becomes an address, the name stops mattering — which is why a host that moves is stale until a TTL expires, and why an address proves nothing about who answered. DNX keeps the name meaningful all the way down: routers forward on it, and the key bound to it makes the reply verifiable.</p>
+          <p><strong>Where DNS wins.</strong> Universality, caching, decades of operational knowledge, and delegation that actually works at global scale. DNX's registry is a single server. DNS is a planetary system with governance. That is not a small gap.</p>
+        </div>
+        <div class="callout">
+          <div class="t">Fair criticism</div>
+          <p>DNX still uses DNS to find its own registry at boot. That is the one place the old namespace appears — and it means DNX is not independent of DNS so much as layered above it.</p>
+        </div>
+      </section>
+
+      <section id="wireguard" class="section" style="padding-left:0;padding-right:0">
+        <h2>WireGuard</h2>
+        <div class="prose">
+          <p><strong>What it does.</strong> A small, fast, audited VPN. Peers are identified by public keys; traffic is encrypted with modern cryptography and almost nothing else.</p>
+          <p><strong>What DNX borrows.</strong> The identity model, frankly. "The keypair is the machine" is WireGuard's insight, and DNX's session layer uses the same primitives for the same reasons.</p>
+          <p><strong>Where DNX differs.</strong> WireGuard has no naming and no routing story — you configure peers with keys and endpoints, and you assign IPs by hand. DNX generates names, resolves them, traverses NAT automatically, and forwards on the name hierarchy. WireGuard is a tunnel; DNX is trying to be an addressing layer.</p>
+          <p><strong>Where WireGuard wins.</strong> Everything that matters for production: it is audited, in the Linux kernel, and enormously faster than a userspace prototype. If you need encrypted transport today, use WireGuard. There is no honest argument otherwise.</p>
+        </div>
+      </section>
+
+      <section id="tailscale" class="section" style="padding-left:0;padding-right:0">
+        <h2>Tailscale · ZeroTier</h2>
+        <div class="prose">
+          <p><strong>What they do.</strong> Managed overlay networks: a coordination server distributes keys and endpoints, NAT traversal is automatic, and machines get memorable names. If DNX's demo looks familiar to you, this is why.</p>
+        </div>
+        <div class="callout warn">
+          <div class="t">The most important comparison on this page</div>
+          <p>Much of what DNX demonstrates today — reaching a machine behind a home router by name, with no port forwarding and cryptographic identity — Tailscale already does, in production, with a real company behind it. Anyone evaluating DNX should know that up front.</p>
+        </div>
+        <div class="prose">
+          <p><strong>Where DNX differs.</strong> These are <em>flat meshes</em>: a coordination server knows every node, and every node can be told about every other. That model is excellent and it does not aggregate — the coordinator's knowledge grows with the number of machines. DNX's claim is about hierarchy: a core router holds one entry per top-level domain regardless of how many hosts exist beneath it. Whether that matters depends entirely on whether you believe overlays should scale like the Internet or like a company network.</p>
+          <p><strong>Where they win.</strong> Maturity, reliability, support, and the fact that they solve the problem people actually have.</p>
+        </div>
+      </section>
+
+      <section id="libp2p" class="section" style="padding-left:0;padding-right:0">
+        <h2>libp2p</h2>
+        <div class="prose">
+          <p><strong>What it does.</strong> A modular peer-to-peer networking stack — transports, multiplexing, peer identity from keys, DHT-based discovery. It is the plumbing under IPFS and many others.</p>
+          <p><strong>Where DNX differs.</strong> libp2p peers are identified by a hash of their public key, which is unforgeable but unreadable and carries no structure. Discovery is a distributed hash table: flat, and unrelated to any hierarchy. DNX's identifiers are human hierarchies that a router can aggregate on. libp2p optimises for permissionless discovery; DNX optimises for structured routing.</p>
+          <p><strong>Where libp2p wins.</strong> It is a real library you can build an application on this afternoon, with implementations in several languages and no central coordinator anywhere.</p>
+        </div>
+      </section>
+
+      <section id="tor" class="section" style="padding-left:0;padding-right:0">
+        <h2>Tor · I2P</h2>
+        <div class="prose">
+          <p><strong>What they do.</strong> Anonymity networks. Onion addresses are self-certifying names derived from keys, which is a genuine parallel to DNX's binding of names to keys.</p>
+          <p><strong>Where DNX differs.</strong> Tor deliberately destroys the relationship between a name and a location — that is the entire point. DNX deliberately preserves it, because it wants routers to aggregate on it. The two designs want opposite things.</p>
+          <p><strong>Where Tor wins.</strong> If you need to hide who is talking to whom, DNX is the wrong tool and always will be. DNX conceals payloads, not relationships: the registry sees who resolves whom.</p>
+        </div>
+      </section>
+
+      <section id="scion" class="section" style="padding-left:0;padding-right:0">
+        <h2>SCION</h2>
+        <div class="prose">
+          <p><strong>What it does.</strong> A clean-slate inter-domain architecture built around isolation domains and path-aware routing, where senders choose paths and trust roots are explicit. It is deployed in production networks, notably in the Swiss financial sector.</p>
+          <p><strong>Where DNX differs.</strong> SCION reorganises routing between <em>networks</em>, keeping addresses roughly as they are. DNX reorganises the <em>address</em> itself and lets the hierarchy do the routing. They are attacking different halves of the same discomfort.</p>
+          <p><strong>Where SCION wins.</strong> It is vastly more mature, has real deployments, formal analysis, and an actual answer to inter-domain trust. DNX has a prototype and a document.</p>
+        </div>
+      </section>
+
+      <section id="ndn" class="section" style="padding-left:0;padding-right:0">
+        <h2>Named Data Networking</h2>
+        <div class="prose">
+          <p><strong>What it does.</strong> The most serious existing attempt at name-based forwarding: routers hold name-based forwarding tables and route requests toward <em>data</em> rather than hosts. Research since roughly 2009.</p>
+          <p><strong>Where DNX differs.</strong> NDN names content; DNX names endpoints. NDN is pull-based — you express interest in a name and data comes back — which changes the application model profoundly. DNX keeps ordinary host-to-host connections, which makes it far less ambitious and far easier to deploy incrementally.</p>
+          <p><strong>Where NDN wins.</strong> Depth. NDN has years of published research on exactly the hard problem DNX hand-waves: making name-based forwarding tables fast enough for real hardware. DNX borrows from that literature rather than competing with it.</p>
+        </div>
+      </section>
+
+      <section id="mpls" class="section" style="padding-left:0;padding-right:0">
+        <h2>MPLS</h2>
+        <div class="prose">
+          <p><strong>What it does.</strong> Forwards on a stack of short labels rather than addresses. Each hop reads the top label, swaps or pops it, and forwards — in hardware, at line rate, in essentially every large carrier network on Earth.</p>
+          <p><strong>Why it matters here.</strong> This is the strongest evidence that DNX's forwarding model is implementable. "Variable-depth stack of small identifiers, each hop reading only the top one" describes MPLS and DNX equally well. The objection that name-based forwarding cannot run at line rate is answered by twenty years of production MPLS.</p>
+          <p><strong>Where DNX differs.</strong> MPLS labels are locally significant and signalled per path — they mean nothing outside the router pair that agreed on them, and they carry no identity. DNX identifiers are derived from a namespace that means something everywhere, and are bound to keys. MPLS is a forwarding optimisation beneath IP; DNX is trying to replace what is being forwarded on.</p>
+        </div>
+      </section>
+
+      <section id="idloc" class="section" style="padding-left:0;padding-right:0">
+        <h2>ILNP · LISP · HIP</h2>
+        <div class="prose">
+          <p><strong>What they do.</strong> All three split identity from location, which is the same instinct DNX has. ILNP separates identifier and locator within addressing; LISP tunnels between locators using a mapping system; HIP inserts a cryptographic host identity between the transport and network layers.</p>
+          <p><strong>Where DNX differs.</strong> These keep locators numeric and add a mapping layer to reach them. DNX makes the locator a <em>routable name hierarchy</em>, so the thing you route on is the thing a human reads. HIP is the closest relative on identity; DNX's contribution is fusing that cryptographic identity to a locator that aggregates.</p>
+          <p><strong>Where they win.</strong> They are standardised, analysed, and in LISP's case widely implemented. DNX should be read as a descendant of this family, not a rival to it.</p>
+        </div>
+      </section>
+
+      <section id="honest" class="section" style="padding-left:0;padding-right:0">
+        <h2>So what is actually new?</h2>
+        <div class="prose">
+          <p>Stripping away everything that already exists elsewhere, the claim reduces to one combination:</p>
+          <ul>
+            <li>A <strong>human-readable name hierarchy used directly as the routing hierarchy</strong>, so forwarding tables aggregate by construction rather than by allocation policy.</li>
+            <li>A <strong>cryptographic identity fused into that same hierarchy</strong>, so reaching a name and verifying its owner are the same operation.</li>
+            <li>An <strong>incremental deployment path</strong> over existing IP, so none of it requires a flag day.</li>
+          </ul>
+          <p>Each ingredient exists somewhere already. The combination is what DNX is testing, and the honest position is that it is a hypothesis with a working prototype — not a finished argument.</p>
+          <p>If you think this is wrong, that is a useful thing to say out loud: <a href="https://github.com/Xbitium/DNX">github.com/Xbitium/DNX</a></p>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <footer class="wrap footer">
+    <span>DNXRoute · Comparisons</span>
+    <span>If an existing tool is the better answer, this page should say so · <a href="https://github.com/Xbitium/DNX">GitHub</a></span>
+  </footer>
+</body>
+</html>

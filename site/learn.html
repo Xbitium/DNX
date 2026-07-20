@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Learn networking, then DNX — DNXRoute</title>
+  <meta name="description" content="A short course from first principles: packets, IP addresses, routing and aggregation, NAT, DNS, TLS, public keys, hole punching, overlays — and then what DNX changes." />
+  <meta name="theme-color" content="#0f5f68" />
+  <link rel="canonical" href="https://dnxroute.com/learn" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="wrap topbar-inner">
+      <div>
+        <div class="kicker"><a href="/">DNXRoute</a></div>
+        <div class="muted">Learn</div>
+      </div>
+      <nav class="nav">
+        <a href="/learn">Learn</a>
+        <a href="/protocol">Protocol</a>
+        <a href="/compare">Compare</a>
+        <a href="/journal">Journal</a>
+        <a href="https://routing.dnxroute.com">Demo</a>
+        <a href="https://github.com/Xbitium/DNX">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <div class="wrap doc">
+    <aside class="toc">
+      <div class="toc-title">Lessons</div>
+      <a href="#packet">1 · Packets</a>
+      <a href="#address">2 · Addresses</a>
+      <a href="#routing">3 · Routing</a>
+      <a href="#nat">4 · NAT</a>
+      <a href="#dns">5 · DNS</a>
+      <a href="#keys">6 · Public keys</a>
+      <a href="#tls">7 · TLS</a>
+      <a href="#punch">8 · Hole punching</a>
+      <a href="#overlay">9 · Overlays</a>
+      <a href="#dnx">10 · What DNX changes</a>
+    </aside>
+
+    <main>
+      <p class="eyebrow">Learn</p>
+      <h1 style="font-family:Archivo,sans-serif;font-size:clamp(2rem,5vw,3.2rem);line-height:1.08;letter-spacing:-.02em;margin:.2rem 0 1rem">Everything you need to understand DNX.</h1>
+      <div class="prose">
+        <p>No networking background assumed. Each lesson is short and answers one question, and by the end you will know enough to judge whether DNX's argument holds up — including where it does not.</p>
+      </div>
+
+      <section id="packet" class="section" style="border-top:none;padding-left:0;padding-right:0">
+        <h2>1 · What is a packet?</h2>
+        <div class="prose">
+          <p>Networks do not send files or messages. They send <strong>packets</strong>: small chunks of data, typically around 1,500 bytes, each carrying enough labelling to travel independently.</p>
+          <p>A packet is built in layers, like an envelope inside an envelope. Each layer adds a header saying what the layer beneath needs to know, and treats everything above it as opaque cargo.</p>
+        </div>
+
+        <figure class="diagram">
+          <svg viewBox="0 0 860 200" role="img" aria-label="Nested packet headers: IP wraps TCP which wraps the application data.">
+            <rect class="svg-box" x="10" y="30" width="840" height="130" />
+            <text class="svg-sub" x="26" y="52">IP HEADER — where it goes</text>
+            <rect class="svg-box" x="150" y="62" width="690" height="86" />
+            <text class="svg-sub" x="166" y="84">TCP HEADER — which conversation</text>
+            <rect class="svg-box-accent" x="330" y="94" width="500" height="44" />
+            <text class="svg-strong" x="348" y="122">your actual data</text>
+            <text class="svg-sub" x="26" y="184">Each layer only reads its own header and passes the rest along untouched.</text>
+          </svg>
+          <figcaption>Routers in the middle read only the outermost header. They neither see nor care what the payload is.</figcaption>
+        </figure>
+      </section>
+
+      <section id="address" class="section" style="padding-left:0;padding-right:0">
+        <h2>2 · What is an IP address?</h2>
+        <div class="prose">
+          <p>A number identifying a network interface — <code>203.0.113.7</code> in the familiar form. Critically, it describes <strong>where something is attached</strong>, not what or who it is. Move a laptop to a different network and it gets a different address, because the address describes the connection point.</p>
+          <p>This is the single fact that explains most of the rest of networking's complexity. An address is a location, and locations change, and locations prove nothing about identity.</p>
+        </div>
+      </section>
+
+      <section id="routing" class="section" style="padding-left:0;padding-right:0">
+        <h2>3 · How routing works — and why aggregation is everything</h2>
+        <div class="prose">
+          <p>No router knows where every machine on Earth is. There are billions, and the table would be impossible. Instead routers work with <strong>prefixes</strong> — blocks of addresses that share a beginning.</p>
+          <p>A router holds a rule like "anything starting <code>203.0.113</code> goes out this port". One line covers 256 machines. Bigger blocks cover millions. This is <strong>aggregation</strong>, and it is what makes the Internet possible.</p>
+        </div>
+
+        <figure class="diagram">
+          <svg viewBox="0 0 860 210" role="img" aria-label="A core router with a few prefix entries covering many hosts.">
+            <rect class="svg-box-accent" x="10" y="20" width="240" height="150" />
+            <text class="svg-strong" x="30" y="48">core router</text>
+            <text class="svg-sub" x="30" y="76">203.0.113.x → port 1</text>
+            <text class="svg-sub" x="30" y="98">198.51.100.x → port 2</text>
+            <text class="svg-sub" x="30" y="120">192.0.2.x → port 3</text>
+            <text class="svg-accent" x="30" y="150">3 lines</text>
+
+            <path class="svg-line" d="M256,95 L330,95" />
+            <rect class="svg-box-dim" x="340" y="20" width="510" height="150" />
+            <text class="svg-label" x="360" y="60">…covering hundreds of individual machines,</text>
+            <text class="svg-label" x="360" y="86">none of which the core router has ever heard of.</text>
+            <text class="svg-sub" x="360" y="126">Add a thousand more hosts inside those blocks and the</text>
+            <text class="svg-sub" x="360" y="146">table stays exactly three lines long.</text>
+          </svg>
+          <figcaption>Aggregation is not a performance trick. Without it there is no Internet, only a very large spreadsheet.</figcaption>
+        </figure>
+
+        <div class="callout">
+          <div class="t">Remember this one</div>
+          <p>Any proposal to change how the Internet addresses things must reproduce aggregation, or it cannot scale past a small network. This is the bar DNX has to clear.</p>
+        </div>
+      </section>
+
+      <section id="nat" class="section" style="padding-left:0;padding-right:0">
+        <h2>4 · Why NAT exists, and what it broke</h2>
+        <div class="prose">
+          <p>The original address space allowed about 4.3 billion addresses, and we ran out. <strong>Network Address Translation</strong> was the workaround: give a whole household or office one public address, and let the router rewrite outgoing packets so they all appear to come from it, keeping a table to send replies back to the right machine.</p>
+          <p>It worked, and it is why the Internet did not seize up. But it broke something fundamental: <strong>machines behind NAT have no address anyone outside can reach.</strong> Your laptop can start conversations, but nothing outside can start one with it — there is no entry in the translation table yet, so the router does not know where to send it.</p>
+          <p>Port forwarding, dynamic DNS, VPNs, relay servers and "hole punching" all exist to work around this one consequence.</p>
+        </div>
+      </section>
+
+      <section id="dns" class="section" style="padding-left:0;padding-right:0">
+        <h2>5 · Why DNS exists</h2>
+        <div class="prose">
+          <p>People cannot remember numbers, so the Domain Name System translates <code>example.com</code> into an address before your machine connects. It is hierarchical and delegated: whoever runs <code>.com</code> points at whoever runs <code>example.com</code>, who points at the actual records.</p>
+          <p>Two consequences matter for DNX. First, answers are <strong>cached with a time-to-live</strong>, so a machine that moves can be unreachable for minutes or hours while the world holds a stale answer. Second, and more importantly: <strong>once the name becomes an address, the name stops mattering.</strong> Every router afterwards sees only numbers.</p>
+        </div>
+      </section>
+
+      <section id="keys" class="section" style="padding-left:0;padding-right:0">
+        <h2>6 · Public keys in one minute</h2>
+        <div class="prose">
+          <p>A keypair is two matched numbers. One is <strong>private</strong> and never leaves your machine; the other is <strong>public</strong> and you hand it to anyone.</p>
+          <p>The private key can produce a <strong>signature</strong> over a message. Anyone holding the public key can check that signature. Nobody can forge it without the private key. That is the whole idea, and it gives you something an address never can: proof that a specific holder of a secret produced this exact message.</p>
+          <p>DNX uses this to bind a name to a keypair. Reaching a name and proving who answered become the same operation.</p>
+        </div>
+      </section>
+
+      <section id="tls" class="section" style="padding-left:0;padding-right:0">
+        <h2>7 · Why TLS exists</h2>
+        <div class="prose">
+          <p>Because the network layer proves nothing. When you connect to an address, you have no idea who is on the other end — so TLS runs <em>above</em> the connection, presenting a certificate that some authority vouches for, and then encrypting everything.</p>
+          <p>It works well. But notice the shape of it: identity was not part of addressing, so it had to be added on top afterwards, with its own separate trust system. DNX's question is what happens if identity is part of the address from the beginning.</p>
+        </div>
+      </section>
+
+      <section id="punch" class="section" style="padding-left:0;padding-right:0">
+        <h2>8 · Hole punching</h2>
+        <div class="prose">
+          <p>Here is the trick that makes NAT-crossing possible without configuring anything. Two machines, both behind routers that block unexpected incoming traffic, both want to talk.</p>
+          <p>A third party that both can reach — because outbound always works — tells each about the other. Then <strong>both send packets outward at the same moment</strong>. Each outgoing packet creates an entry in its own router's translation table, and that entry is exactly what allows the other side's traffic in.</p>
+          <p>The insight worth keeping: NAT was never blocking inbound traffic. It was blocking <em>unexpected</em> inbound traffic. Make it expected at both ends simultaneously and the wall opens from the inside.</p>
+        </div>
+      </section>
+
+      <section id="overlay" class="section" style="padding-left:0;padding-right:0">
+        <h2>9 · Overlay networks</h2>
+        <div class="prose">
+          <p>An overlay is a network built <em>on top of</em> another one. Its packets travel as ordinary payload inside the network beneath, which means it can invent its own addressing without asking anyone's permission or replacing any hardware.</p>
+          <p>This is how new networking ideas actually get deployed. IP itself began as an overlay on the telephone system. Nobody removed the copper — it simply stopped being what anyone thought about.</p>
+        </div>
+      </section>
+
+      <section id="dnx" class="section" style="padding-left:0;padding-right:0">
+        <h2>10 · So what does DNX change?</h2>
+        <div class="prose">
+          <p>Put the previous nine lessons together and a pattern appears. Addresses are locations, so identity had to be bolted on afterwards (TLS). Addresses ran out, so NAT appeared, so reachability broke, so VPNs and relays appeared. Names get translated away immediately, so the network never benefits from their structure.</p>
+          <p>DNX asks: what if the name kept mattering all the way down?</p>
+          <ul>
+            <li><strong>The name is bound to a key</strong>, so reaching it and verifying it are one operation — no separate certificate system.</li>
+            <li><strong>The name hierarchy is the routing hierarchy</strong>, so aggregation comes from the namespace's own structure rather than from address allocation policy.</li>
+            <li><strong>Hole punching is built in</strong>, so a machine behind a home router is addressable with no configuration at all.</li>
+            <li><strong>It runs as an overlay</strong>, so none of this requires replacing hardware or coordinating a flag day.</li>
+          </ul>
+          <p>Whether that is a good idea is exactly what the project is trying to find out. The <a href="/protocol">specification</a> describes how it works and lists what is broken; the <a href="/compare">comparisons</a> cover the many cases where an existing tool is the better answer.</p>
+        </div>
+        <div class="callout">
+          <div class="t">See it work</div>
+          <p>The <a href="https://routing.dnxroute.com">live demo</a> routes a packet across two datacenters by name, showing each hop as it happens.</p>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <footer class="wrap footer">
+    <span>DNXRoute · Learn</span>
+    <span>Start with fundamentals, judge the argument yourself · <a href="https://github.com/Xbitium/DNX">GitHub</a></span>
+  </footer>
+</body>
+</html>
