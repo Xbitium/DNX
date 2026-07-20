@@ -137,7 +137,11 @@ func (r *Registry) FromName(fqdn string) (Addr, error) {
 
 	// --- hashed tiers (self-service) ---
 	// Anything between host and domain is subdomain; the first label is host.
-	if n >= 3 {
+	// A name with only domain.tld has no subdomain, and its subdomain field
+	// stays zero. The guard is n >= 4, not n >= 3: at n == 3 the expression
+	// labels[n-3] is labels[0], which is the HOST label, so a three-label
+	// name silently copied its host into its subdomain field.
+	if n >= 4 {
 		a.Field[Subdomain] = hash64(labels[n-3]) // the label just below domain
 	}
 	a.Field[Host] = hash64(labels[0]) // the leftmost label is the host
