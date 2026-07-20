@@ -125,7 +125,8 @@
           <p>The endpoint is not asserted by the node — it is observed by the registry from the packet's own source address, and is deliberately excluded from the signature. A node therefore cannot lie about its location, because it never claims one.</p>
         </div>
         <div class="prose">
-          <p>Records unseen for 60 seconds are treated as offline; unseen for ten times that, they are pruned. A <code>REGISTER</code> for an already-bound name under a different key is rejected regardless of signature validity — possession of a name requires possession of its key.</p>
+          <p>A <code>REGISTER</code> for an already-bound name under a different key is rejected regardless of signature validity — possession of a name requires possession of its key.</p>
+          <p><strong>Ownership is not liveness.</strong> Two lifetimes run independently: an endpoint is forgotten after 60 seconds without a heartbeat, so nobody is directed to a machine that has moved or gone away; but the name-to-key binding is retained for a year. An earlier implementation conflated the two and deleted the whole record after ten minutes of silence, which meant a machine switched off for long enough lost its name to whoever registered next. A name is owned, not leased to whoever happens to be awake.</p>
           <p>How registries delegate, federate, and deploy in practice — and how much of that is still unbuilt — is covered in the <a href="/registry">registry design note</a>.</p>
         </div>
       </section>
@@ -291,7 +292,9 @@ both:   shared = X25519(eph_priv, peer_eph_pub)
             <tr><td>Registry replies unsigned</td><td>An on-path attacker can forge resolution answers, enabling denial of service and misdirection. It does <em>not</em> enable impersonation — a poisoned endpoint still cannot produce replies that verify against the genuine key.</td><td>Registry keypair and signed responses</td></tr>
             <tr><td>Rendezvous cues unsigned</td><td>A spoofed cue can induce a node to emit a small burst of packets to an arbitrary address — a minor reflection primitive.</td><td>Folds into signed registry traffic</td></tr>
             <tr><td>Single registry</td><td>A single point of failure, and a single point of control. It also observes who resolves whom.</td><td>Federation and a signed, replicated name table</td></tr>
-            <tr><td>First-come-first-served names</td><td>Nothing prevents squatting desirable names.</td><td>Delegation anchored to domain-ownership proofs</td></tr>
+            <tr><td>First-come-first-served names</td><td>Nothing prevents squatting desirable names, and nothing ties a DNX name to actual control of the corresponding domain.</td><td>Delegation anchored to domain-ownership proofs</td></tr>
+            <tr><td>Hash-derived address fields</td><td>The lower levels of the current address are a 64-bit truncated hash of the label, so two distinct labels can collide. A deliberate collision costs roughly 2<sup>32</sup> work — hours on commodity hardware — and causes packets to be forwarded to the wrong host. It does <em>not</em> permit impersonation: the session handshake still fails against the real name's key, so this is an availability attack rather than a takeover.</td><td>Registry-assigned identifiers — see <a href="/proposals#p1">DNXP-0001</a></td></tr>
+            <tr><td>No homograph policy</td><td>Visually identical names built from different scripts are distinct names, so one can impersonate another to a human reader.</td><td>Registration rules at the naming authority</td></tr>
             <tr><td>Symmetric NAT</td><td>Simple hole punching fails; those peers are unreachable.</td><td>Relayed fallback</td></tr>
           </tbody>
         </table>

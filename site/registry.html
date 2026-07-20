@@ -66,6 +66,7 @@
         </table>
         <div class="prose">
           <p>The first is an <em>authority</em> question and must be answered consistently by whoever owns the namespace. The second is <em>soft state</em> that expires on its own. The third is a momentary service that holds nothing. In a mature deployment these are three services, possibly run by three different parties.</p>
+          <p>Keeping them distinct matters more than it sounds. Conflating authority with liveness produces a specific and nasty failure: if a binding expires because a machine went quiet, then switching a machine off is indistinguishable from giving up its name. The two lifetimes must be independent — an endpoint may be forgotten in a minute, while ownership persists for a year.</p>
         </div>
       </section>
 
@@ -184,7 +185,7 @@
             <li><strong>Signed responses.</strong> Registry replies are unsigned, so an on-path attacker can forge resolution answers. This does not permit impersonation — a forged endpoint still cannot produce replies that verify against the genuine key — but it permits denial of service.</li>
             <li><strong>Replication.</strong> No failover, no anycast, no replicas.</li>
             <li><strong>Metadata privacy.</strong> The single registry observes every resolution, and therefore knows who talks to whom. Delegation improves this by scoping each registry's view to its own zone, but does not eliminate it.</li>
-            <li><strong>Ownership binding.</strong> Nothing ties a DNX name to actual control of the corresponding domain, so any name may currently be claimed by anyone.</li>
+            <li><strong>Ownership binding.</strong> Nothing ties a DNX name to actual control of the corresponding domain, so any unclaimed name may currently be registered by anyone. Once claimed, however, it cannot be taken — including while its owner is offline.</li>
           </ul>
           <p>These are listed in the <a href="/protocol#security">protocol's security section</a> as well. A design note that described only the intended architecture, without saying how much of it is imaginary, would be marketing.</p>
         </div>

@@ -33,6 +33,7 @@
   <div class="wrap doc">
     <aside class="toc">
       <div class="toc-title">Entries</div>
+      <a href="#e7">0007 · Ownership</a>
       <a href="#e6">0006 · Naming</a>
       <a href="#e5">0005 · Four levels</a>
       <a href="#e4">0004 · Deadlock</a>
@@ -47,6 +48,22 @@
       <div class="prose">
         <p>A protocol is mostly a record of arguments someone had with themselves. These entries document why DNX is shaped the way it is — including the bugs that changed its design, which are usually more informative than the parts that worked first time.</p>
       </div>
+
+      <article id="e7" class="entry">
+        <div class="meta">JOURNAL 0007 · 20 JULY 2026</div>
+        <h3>A name you could lose by going to lunch</h3>
+        <div class="prose">
+          <p>The registry enforces a rule it is quite proud of: the first key to claim a name owns it, and a registration under a different key is refused no matter how valid its signature. That rule was correct, and it was quietly useless, because of eleven lines somewhere else.</p>
+          <p>A background loop deleted any record that had not sent a heartbeat in ten minutes. The intent was housekeeping — expire machines that have gone away. The effect was that <strong>ownership was a function of uptime</strong>. Switch a laptop off over lunch and the binding was gone; the next registration for that name, from anybody, created a fresh one. When the rightful owner came back it was refused its own name, because the name now belonged to somebody else's key.</p>
+          <p>Nothing was compromised cryptographically. It was worse than that in a way: the protocol behaved exactly as specified, and the specification was wrong. Identity was being leased to whoever happened to be awake.</p>
+          <p>The fix is to separate two lifetimes that were never the same thing. An <em>endpoint</em> is liveness and expires in sixty seconds, so nobody is directed to a machine that has moved. A <em>name-to-key binding</em> is ownership and is retained for a year, then retired deliberately rather than as a side effect of a cleanup loop.</p>
+          <p>Six tests now cover the rule, including one pinned to the exact ten-minute boundary that used to fail, so a future adjustment to a constant cannot quietly reintroduce it. As with the deadlock, the fix was verified by reverting it and confirming the tests fail.</p>
+        </div>
+        <div class="callout warn">
+          <div class="t">Rule extracted</div>
+          <p>Before deleting anything on a timer, ask what the timer is really measuring. "Has not spoken recently" and "no longer owns this" are different claims, and a cleanup loop is not entitled to conflate them.</p>
+        </div>
+      </article>
 
       <article id="e6" class="entry">
         <div class="meta">JOURNAL 0006 · 20 JULY 2026</div>
