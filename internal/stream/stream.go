@@ -109,13 +109,13 @@ type Stream struct {
 	err    error
 
 	// ---- send side ----
-	sndNext   uint32     // next byte offset we will assign
-	sndUnack  uint32     // oldest byte we have not had ACKed
-	sndQueue  []*segment // outstanding, ordered by seq
-	peerWnd   uint32     // peer's advertised free buffer
-	cwnd      uint32     // congestion window, in bytes
-	ssthresh  uint32     // slow-start threshold
-	finSent   bool
+	sndNext  uint32     // next byte offset we will assign
+	sndUnack uint32     // oldest byte we have not had ACKed
+	sndQueue []*segment // outstanding, ordered by seq
+	peerWnd  uint32     // peer's advertised free buffer
+	cwnd     uint32     // congestion window, in bytes
+	ssthresh uint32     // slow-start threshold
+	finSent  bool
 
 	// ---- receive side ----
 	rcvNext  uint32            // next in-order byte we expect
@@ -146,9 +146,9 @@ type Stream struct {
 // socket; in tests it can be a lossy virtual link.
 func New(sendFn func([]byte)) *Stream {
 	s := &Stream{
-		sendFn:   sendFn,
-		rcvOOO:   make(map[uint32][]byte),
-		peerWnd:  RecvBufMax, // optimistic until the peer tells us otherwise
+		sendFn:        sendFn,
+		rcvOOO:        make(map[uint32][]byte),
+		peerWnd:       RecvBufMax, // optimistic until the peer tells us otherwise
 		cwnd:          initialCwnd,
 		ssthresh:      RecvBufMax,
 		rto:           minRTO * 3, // conservative before the first RTT sample

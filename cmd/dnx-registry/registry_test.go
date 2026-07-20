@@ -2,6 +2,7 @@ package main
 
 import (
 	"net"
+	"os"
 	"testing"
 	"time"
 )
@@ -159,5 +160,102 @@ func TestDistinctNamesAreIndependent(t *testing.T) {
 	}
 	if r.names["b.dnx.dnxroute.com"].Endpoint == nil {
 		t.Fatal("b was still fresh and should not have been marked offline")
+	}
+}
+
+// TestOwnershipSurvivesRestart is the regression test for the second half of
+// the same bug.
+//
+// Separating ownership from liveness kept a name safe while its machine was
+// switched off — but the table lived only in memory, so restarting the
+// registry un-owned every name in existence. Deploying a fix would itself
+// have handed the whole namespace to whoever registered first afterwards.
+func TestOwnershipSurvivesRestart(t *testing.T) {
+	dir := t.TempDir()
+	state := dir + "/registry.json"
+	start := time.Now()
+
+	// --- first process ---
+	r1 := &registry{names: map[string]*record{}, statePath: state}
+	if got := r1.bind(theName, ownerKey, addr(t, "203.0.113.7:4400"), start); got != bindNew {
+		t.Fatalf("setup: %v", got)
+	}
+	if err := r1.save(); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	// --- process restarts: brand new in-memory state ---
+	r2 := &registry{names: map[string]*record{}, statePath: state}
+	n, err := r2.load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("expected 1 restored binding, got %d", n)
+	}
+
+	// The attacker tries to claim the name the moment the registry comes back.
+	if got := r2.bind(theName, attackerKey, addr(t, "198.51.100.9:4400"), start); got != bindRejected {
+		t.Fatalf("CRITICAL: name was claimable after a registry restart (got %v)", got)
+	}
+	// The owner reconnects and is recognised.
+	if got := r2.bind(theName, ownerKey, addr(t, "203.0.113.7:7000"), start); got != bindRefreshed {
+		t.Fatalf("CRITICAL: owner not recognised after restart (got %v)", got)
+	}
+
+	// Endpoints are liveness and must NOT be restored from disk — a restored
+	// endpoint could send traffic to a machine that has since moved.
+	r3 := &registry{names: map[string]*record{}, statePath: state}
+	r3.load()
+	if r3.names[theName].Endpoint != nil {
+		t.Fatal("endpoint should not be persisted; it is liveness, not ownership")
+	}
+	if r3.names[theName].PubB64 != ownerKey {
+		t.Fatal("CRITICAL: restored binding has the wrong key")
+	}
+}
+
+// TestFirstBootHasNoState: a missing state file is normal, not an error.
+func TestFirstBootHasNoState(t *testing.T) {
+	r := &registry{names: map[string]*record{}, statePath: t.TempDir() + "/absent.json"}
+	n, err := r.load()
+	if err != nil {
+		t.Fatalf("first boot should not error: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("expected empty table, got %d", n)
+	}
+}
+
+// TestSaveLeavesNoPartialFile: the write is atomic, so no temporary file is
+// left behind and the result always parses.
+func TestSaveLeavesNoPartialFile(t *testing.T) {
+	dir := t.TempDir()
+	state := dir + "/registry.json"
+	r := &registry{names: map[string]*record{}, statePath: state}
+	r.bind("a.dnx.dnxroute.com", ownerKey, addr(t, "203.0.113.7:4400"), time.Now())
+	if err := r.save(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(state + ".tmp"); !os.IsNotExist(err) {
+		t.Fatal("temporary file was left behind after save")
+	}
+	// And it round-trips.
+	r2 := &registry{names: map[string]*record{}, statePath: state}
+	if _, err := r2.load(); err != nil {
+		t.Fatalf("saved file did not parse: %v", err)
+	}
+}
+
+// TestPersistenceDisabledIsExplicit: an empty path disables persistence
+// without erroring, which is what tests and ephemeral instances rely on.
+func TestPersistenceDisabledIsExplicit(t *testing.T) {
+	r := &registry{names: map[string]*record{}, statePath: ""}
+	r.bind(theName, ownerKey, addr(t, "203.0.113.7:4400"), time.Now())
+	if err := r.save(); err != nil {
+		t.Fatalf("save with persistence disabled should be a no-op: %v", err)
+	}
+	if n, err := r.load(); err != nil || n != 0 {
+		t.Fatalf("load with persistence disabled should be a no-op: n=%d err=%v", n, err)
 	}
 }

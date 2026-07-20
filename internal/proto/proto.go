@@ -56,7 +56,7 @@ type Message struct {
 	Info     string `json:"info,omitempty"`     // free-text detail (errors, debug)
 
 	// ---- v0.2 handshake fields ----
-	EphPub string `json:"eph,omitempty"`    // base64 X25519 ephemeral public key
+	EphPub string `json:"eph,omitempty"`     // base64 X25519 ephemeral public key
 	NonceB string `json:"nonce_b,omitempty"` // responder's nonce (HS_RESP only; Nonce carries the initiator's)
 }
 

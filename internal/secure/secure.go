@@ -179,15 +179,15 @@ func deriveKey(shared []byte, nonceA, nonceB, info string) ([]byte, error) {
 // Session holds the directional AEAD ciphers for one peer.
 // Safe for concurrent use.
 type Session struct {
-	PeerName   string    // the FQDN on the other end (verified, not claimed)
-	PeerIDKey  string    // peer's long-term ed25519 key, base64 (from the registry)
+	PeerName    string    // the FQDN on the other end (verified, not claimed)
+	PeerIDKey   string    // peer's long-term ed25519 key, base64 (from the registry)
 	Established time.Time // when the handshake completed
 
 	sendAEAD cipher.AEAD // encrypt outbound with this
 	recvAEAD cipher.AEAD // decrypt inbound with this
 
 	mu      sync.Mutex
-	counter uint64 // monotonic send counter — becomes the AEAD nonce
+	counter uint64              // monotonic send counter — becomes the AEAD nonce
 	seen    map[uint64]struct{} // replay guard: counters already accepted
 }
 
@@ -251,9 +251,9 @@ func (s *Session) Expired() bool {
 // ---------------------------------------------------------------------------
 
 const (
-	FrameMagic  = 0xD8 // first byte: marks a sealed DNX v0.2 frame (vs v0.1 JSON, which starts with '{')
-	headerLen   = 1 + 8
-	nonceLen    = chacha20poly1305.NonceSize // 12
+	FrameMagic = 0xD8 // first byte: marks a sealed DNX v0.2 frame (vs v0.1 JSON, which starts with '{')
+	headerLen  = 1 + 8
+	nonceLen   = chacha20poly1305.NonceSize // 12
 )
 
 // Seal encrypts a plaintext payload into a wire frame.

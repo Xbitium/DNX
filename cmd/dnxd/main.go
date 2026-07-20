@@ -15,9 +15,12 @@
 // use a second socket and hole punching silently dies.
 //
 // Usage (first boot):
-//   dnxd --name computer1.internal.dnxroute.com --registry registry.dnxroute.com:4400
+//
+//	dnxd --name computer1.internal.dnxroute.com --registry registry.dnxroute.com:4400
+//
 // Usage (after):
-//   dnxd
+//
+//	dnxd
 package main
 
 import (
@@ -43,8 +46,8 @@ type agent struct {
 	conn *net.UDPConn // the ONE shared UDP socket
 
 	mu      sync.Mutex
-	regAddr *net.UDPAddr                  // resolved registry address
-	public  string                        // our own public endpoint (learned from REGISTER_ACK)
+	regAddr *net.UDPAddr                   // resolved registry address
+	public  string                         // our own public endpoint (learned from REGISTER_ACK)
 	waiters map[string]chan *proto.Message // nonce/kind -> response channel
 
 	// ---- v0.2 session layer ----
@@ -59,12 +62,12 @@ type agent struct {
 
 // peerSession is a live encrypted channel plus what we need to rebuild it.
 type peerSession struct {
-	sess *secure.Session // nil while a handshake is in flight
-	eph  *secure.Ephemeral
-	addr *net.UDPAddr // peer's current endpoint
-	nonceA string     // initiator nonce for the in-flight handshake
-	done chan struct{} // closed when the session becomes usable
-	err  error
+	sess      *secure.Session // nil while a handshake is in flight
+	eph       *secure.Ephemeral
+	addr      *net.UDPAddr  // peer's current endpoint
+	nonceA    string        // initiator nonce for the in-flight handshake
+	done      chan struct{} // closed when the session becomes usable
+	err       error
 	initiator bool
 }
 
@@ -91,9 +94,9 @@ func main() {
 	}
 
 	a := &agent{
-		id:       id,
-		conn:     conn,
-		waiters:  map[string]chan *proto.Message{},
+		id:          id,
+		conn:        conn,
+		waiters:     map[string]chan *proto.Message{},
 		sessions:    map[string]*peerSession{}, // v0.2: encrypted channels, keyed by peer NAME
 		tunnels:     newTunnelTable(),
 		tunnelServe: *allowTunnel,
@@ -105,11 +108,11 @@ func main() {
 		log.Fatalf("cannot resolve registry %s: %v", id.Registry, err)
 	}
 
-	go a.readLoop()      // dispatch every inbound packet
-	go a.heartbeatLoop() // REGISTER every 15s (keeps NAT warm + endpoint fresh)
-	go a.rekeyLoop()     // v0.2: expire sessions every 5 min (forward secrecy)
+	go a.readLoop()       // dispatch every inbound packet
+	go a.heartbeatLoop()  // REGISTER every 15s (keeps NAT warm + endpoint fresh)
+	go a.rekeyLoop()      // v0.2: expire sessions every 5 min (forward secrecy)
 	go a.tunnelTickLoop() // v0.2: drive stream retransmission timers
-	a.serveAPI(*api)     // blocks: localhost HTTP for the CLI
+	a.serveAPI(*api)      // blocks: localhost HTTP for the CLI
 }
 
 // resolveRegistry turns "registry.dnxroute.com:4400" into a UDP addr.

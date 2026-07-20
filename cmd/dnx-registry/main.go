@@ -19,9 +19,13 @@
 package main
 
 import (
+	"encoding/json"
+	"errors"
 	"flag"
 	"log"
 	"net"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -39,6 +43,85 @@ type record struct {
 type registry struct {
 	mu    sync.Mutex
 	names map[string]*record // FQDN -> record
+
+	// statePath is where ownership is persisted. Empty disables persistence
+	// (used by tests).
+	statePath string
+}
+
+// ---------------------------------------------------------------------------
+// Persistence
+//
+// Ownership must survive a process restart for the same reason it must
+// survive a node going offline: a name is owned, not leased. Without this,
+// restarting the registry would un-own every name in existence and hand the
+// whole namespace to whoever registered first afterwards — the same bug as
+// the ten-minute prune, wearing process uptime instead of node uptime.
+//
+// Endpoints are deliberately NOT persisted. They are liveness, they change
+// constantly, and every live node re-announces its endpoint within one
+// heartbeat interval anyway.
+// ---------------------------------------------------------------------------
+
+type persistedBinding struct {
+	Name     string    `json:"name"`
+	PubB64   string    `json:"pubkey"`
+	LastSeen time.Time `json:"last_seen"`
+}
+
+// save writes the ownership table atomically.
+func (r *registry) save() error {
+	if r.statePath == "" {
+		return nil
+	}
+	r.mu.Lock()
+	out := make([]persistedBinding, 0, len(r.names))
+	for name, rec := range r.names {
+		out = append(out, persistedBinding{Name: name, PubB64: rec.PubB64, LastSeen: rec.LastSeen})
+	}
+	r.mu.Unlock()
+
+	if err := os.MkdirAll(filepath.Dir(r.statePath), 0o700); err != nil {
+		return err
+	}
+	b, err := json.MarshalIndent(out, "", "  ")
+	if err != nil {
+		return err
+	}
+	// Write to a temporary file and rename. A crash midway through a direct
+	// write would leave a truncated table, which would silently un-own every
+	// name after it — exactly the failure this whole mechanism exists to
+	// prevent. Rename is atomic on POSIX filesystems.
+	tmp := r.statePath + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, r.statePath)
+}
+
+// load restores the ownership table. Endpoints start empty; every live node
+// re-announces within one heartbeat.
+func (r *registry) load() (int, error) {
+	if r.statePath == "" {
+		return 0, nil
+	}
+	b, err := os.ReadFile(r.statePath)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, nil // first boot
+	}
+	if err != nil {
+		return 0, err
+	}
+	var in []persistedBinding
+	if err := json.Unmarshal(b, &in); err != nil {
+		return 0, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, p := range in {
+		r.names[p.Name] = &record{PubB64: p.PubB64, LastSeen: p.LastSeen}
+	}
+	return len(in), nil
 }
 
 const (
@@ -114,6 +197,8 @@ func (r *registry) prune(now time.Time) (wentOffline, retired int) {
 
 func main() {
 	listen := flag.String("listen", ":4400", "UDP address to listen on")
+	statePath := flag.String("state", "/var/lib/dnx/registry.json",
+		"file holding persisted name ownership (empty disables persistence)")
 	flag.Parse()
 
 	addr, err := net.ResolveUDPAddr("udp", *listen)
@@ -126,7 +211,16 @@ func main() {
 	}
 	log.Printf("dnx-registry up on %s — the name IS the address.", *listen)
 
-	reg := &registry{names: map[string]*record{}}
+	reg := &registry{names: map[string]*record{}, statePath: *statePath}
+	restored, err := reg.load()
+	if err != nil {
+		log.Fatalf("cannot read ownership state from %s: %v", *statePath, err)
+	}
+	if *statePath == "" {
+		log.Printf("WARNING: persistence disabled — every name becomes unclaimed on restart")
+	} else {
+		log.Printf("restored %d name binding(s) from %s", restored, *statePath)
+	}
 	go reg.pruneLoop() // background: expire dead nodes
 
 	buf := make([]byte, 64*1024) // max UDP datagram
@@ -168,6 +262,11 @@ func (r *registry) handle(conn *net.UDPConn, src *net.UDPAddr, m *proto.Message)
 			return
 		case bindNew:
 			log.Printf("NEW name bound: %s -> key %.12s… (at %s)", m.Name, m.PubKey, src)
+			// A new claim is rare and irreversible — write it out now rather
+			// than waiting for the periodic flush.
+			if err := r.save(); err != nil {
+				log.Printf("WARNING: could not persist new binding for %s: %v", m.Name, err)
+			}
 		}
 
 		// Ack echoes back the observed endpoint — lets the node learn
@@ -188,7 +287,7 @@ func (r *registry) handle(conn *net.UDPConn, src *net.UDPAddr, m *proto.Message)
 			resp = &proto.Message{
 				Kind:     proto.KindResolveResp,
 				Target:   m.Target,
-				PubKey:   rec.PubB64,          // caller verifies pongs against this
+				PubKey:   rec.PubB64,            // caller verifies pongs against this
 				Endpoint: rec.Endpoint.String(), // plumbing, never shown to humans
 			}
 		} else {
@@ -230,6 +329,10 @@ func (r *registry) handle(conn *net.UDPConn, src *net.UDPAddr, m *proto.Message)
 func (r *registry) pruneLoop() {
 	for range time.Tick(30 * time.Second) {
 		r.prune(time.Now())
+		// Flush refreshed timestamps and any retirements.
+		if err := r.save(); err != nil {
+			log.Printf("WARNING: could not persist ownership table: %v", err)
+		}
 	}
 }
 

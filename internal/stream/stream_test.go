@@ -412,8 +412,8 @@ func TestSeqWraparound(t *testing.T) {
 	}{
 		{1, 2, true},
 		{2, 1, false},
-		{0xFFFFFFFF, 0, true},        // wraps forward
-		{0, 0xFFFFFFFF, false},       // does not wrap backward
+		{0xFFFFFFFF, 0, true},  // wraps forward
+		{0, 0xFFFFFFFF, false}, // does not wrap backward
 		{0xFFFFFF00, 0x00000100, true},
 		{5, 5, false},
 	}

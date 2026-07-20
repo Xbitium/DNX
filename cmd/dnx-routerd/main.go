@@ -84,10 +84,10 @@ type routerCfg struct {
 
 // nodeCfg is this daemon's whole config.
 type nodeCfg struct {
-	Node     string               `json:"node"`     // this box's label, e.g. "dnxroute1"
-	Routers  []routerCfg          `json:"routers"`  // routers hosted here (in resolution order)
-	Hops     map[string]string    `json:"hops"`     // next-hop label -> "ip:port" (or ":local"/":deliver")
-	Firsthop string               `json:"firsthop"` // which local router a fresh packet enters at
+	Node     string            `json:"node"`     // this box's label, e.g. "dnxroute1"
+	Routers  []routerCfg       `json:"routers"`  // routers hosted here (in resolution order)
+	Hops     map[string]string `json:"hops"`     // next-hop label -> "ip:port" (or ":local"/":deliver")
+	Firsthop string            `json:"firsthop"` // which local router a fresh packet enters at
 }
 
 // ---------------------------------------------------------------------------
@@ -104,14 +104,14 @@ type daemon struct {
 }
 
 type event struct {
-	TS       int64  `json:"ts"`
-	Node     string `json:"node"`
-	Router   string `json:"router"`
-	Field    string `json:"field"`
-	Value    string `json:"value"`
-	NextHop  string `json:"next_hop"`
-	Action   string `json:"action"` // "forward" | "deliver" | "drop"
-	Detail   string `json:"detail"`
+	TS      int64  `json:"ts"`
+	Node    string `json:"node"`
+	Router  string `json:"router"`
+	Field   string `json:"field"`
+	Value   string `json:"value"`
+	NextHop string `json:"next_hop"`
+	Action  string `json:"action"` // "forward" | "deliver" | "drop"
+	Detail  string `json:"detail"`
 }
 
 func main() {
@@ -246,7 +246,6 @@ func (d *daemon) sendTo(dest string, f *routedFrame) {
 	d.conn.WriteToUDP(f.encode(), addr)
 }
 
-
 func hex64(v uint64) string {
 	const h = "0123456789abcdef"
 	var b [16]byte
@@ -301,7 +300,9 @@ func (d *daemon) serveTelemetry(listen string) {
 	// POST /inject -> originate a packet at this node (dashboard "send" button).
 	// body: {"name":"host1.disa.dnxroute.com"}  — resolved to a 256-bit addr here.
 	mux.HandleFunc("/inject", cors(func(w http.ResponseWriter, r *http.Request) {
-		var body struct{ Name string `json:"name"` }
+		var body struct {
+			Name string `json:"name"`
+		}
 		json.NewDecoder(r.Body).Decode(&body)
 		reg := dnxaddr.NewRegistry()
 		a, err := reg.FromName(body.Name)

@@ -25,7 +25,9 @@ type fieldTable struct {
 	entries map[uint64]string // field value -> next hop
 }
 
-func newFieldTable(depth int) *fieldTable      { return &fieldTable{depth: depth, entries: map[uint64]string{}} }
+func newFieldTable(depth int) *fieldTable {
+	return &fieldTable{depth: depth, entries: map[uint64]string{}}
+}
 func (t *fieldTable) add(v uint64, hop string) { t.entries[v] = hop }
 func (t *fieldTable) size() int                { return len(t.entries) }
 
