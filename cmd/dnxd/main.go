@@ -32,6 +32,8 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -56,8 +58,49 @@ type agent struct {
 	sessions map[string]*peerSession // peer FQDN -> session
 
 	// ---- v0.2 tunnels: TCP carried over DNX streams ----
-	tunnels     *tunnelTable
-	tunnelServe bool // whether we accept inbound tunnel OPENs
+	tunnels *tunnelTable
+
+	// tunnelPorts is the set of loopback ports a peer is permitted to reach.
+	// Empty means inbound tunnels are refused outright.
+	//
+	// This is an allowlist rather than a boolean because handleTunnelOpen
+	// dials whatever port the peer names. A single "tunnels on" switch would
+	// hand any peer that can resolve this node a proxy to every service bound
+	// to 127.0.0.1 — an admin API, a database, a metrics endpoint that was
+	// only ever meant to be local.
+	tunnelPorts map[int]bool
+}
+
+// parseTunnelPorts turns "22, 5432" into a set. An empty string yields an
+// empty set, which disables inbound tunnels.
+func parseTunnelPorts(spec string) (map[int]bool, error) {
+	out := map[int]bool{}
+	for _, f := range strings.Split(spec, ",") {
+		f = strings.TrimSpace(f)
+		if f == "" {
+			continue
+		}
+		n, err := strconv.Atoi(f)
+		if err != nil {
+			return nil, fmt.Errorf("bad port %q", f)
+		}
+		if n < 1 || n > 65535 {
+			return nil, fmt.Errorf("port %d out of range", n)
+		}
+		out[n] = true
+	}
+	return out, nil
+}
+
+// tunnelAllowed reports why a tunnel to port is refused, or nil if permitted.
+func (a *agent) tunnelAllowed(port int) error {
+	if len(a.tunnelPorts) == 0 {
+		return fmt.Errorf("inbound tunnels are disabled on this node")
+	}
+	if !a.tunnelPorts[port] {
+		return fmt.Errorf("port %d is not in this node's tunnel allowlist", port)
+	}
+	return nil
 }
 
 // peerSession is a live encrypted channel plus what we need to rebuild it.
@@ -75,11 +118,16 @@ func main() {
 	name := flag.String("name", "", "this node's FQDN (first boot only), e.g. computer1.internal.dnxroute.com")
 	registry := flag.String("registry", "", "registry host:port (default registry.dnxroute.com:4400)")
 	api := flag.String("api", "127.0.0.1:4401", "localhost control API for the dnx CLI")
-	allowTunnel := flag.Bool("allow-tunnel", false,
-		"accept inbound tunnel requests from peers (exposes local TCP ports to named peers)")
+	tunnelPorts := flag.String("tunnel-ports", "",
+		"comma-separated TCP ports peers may tunnel to, e.g. 22,5432 (empty disables inbound tunnels)")
 	flag.Parse()
 
 	// ---- Identity: load existing or mint on first boot ----
+	allowedPorts, err := parseTunnelPorts(*tunnelPorts)
+	if err != nil {
+		log.Fatalf("--tunnel-ports: %v", err)
+	}
+
 	id, err := identity.LoadOrCreate(*name, *registry)
 	if err != nil {
 		log.Fatalf("identity: %v", err)
@@ -99,10 +147,12 @@ func main() {
 		waiters:     map[string]chan *proto.Message{},
 		sessions:    map[string]*peerSession{}, // v0.2: encrypted channels, keyed by peer NAME
 		tunnels:     newTunnelTable(),
-		tunnelServe: *allowTunnel,
+		tunnelPorts: allowedPorts,
 	}
-	if *allowTunnel {
-		log.Printf("tunnel serving ENABLED — named peers may reach local TCP ports on this host")
+	if len(allowedPorts) == 0 {
+		log.Printf("inbound tunnels disabled (no --tunnel-ports given)")
+	} else {
+		log.Printf("inbound tunnels permitted to ports %v — and nothing else", *tunnelPorts)
 	}
 	if err := a.resolveRegistry(); err != nil {
 		log.Fatalf("cannot resolve registry %s: %v", id.Registry, err)

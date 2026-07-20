@@ -211,13 +211,14 @@ func (a *agent) openTunnelStream(peerName string, remotePort int, conn net.Conn)
 
 // handleTunnelOpen is called when a peer asks us to connect a local port.
 func (a *agent) handleTunnelOpen(peerName string, p sealedPayload, seal func([]byte) []byte, addr *net.UDPAddr) {
-	// SECURITY: only ports on this machine's loopback are reachable, and only
-	// if the operator allowed tunneling. A peer cannot use us as a general
-	// proxy to third parties.
-	if !a.tunnelServe {
-		log.Printf("tunnel: REFUSED open from %s (tunnel serving disabled; start dnxd with --allow-tunnel)", peerName)
+	// SECURITY: only loopback ports are reachable, and only those the operator
+	// named explicitly. A peer cannot use this node as a proxy to third
+	// parties, and cannot reach a local service the operator did not intend
+	// to publish.
+	if err := a.tunnelAllowed(p.Port); err != nil {
+		log.Printf("tunnel: REFUSED %s -> port %d from %s: %v", a.id.Name, p.Port, peerName, err)
 		resp, _ := json.Marshal(sealedPayload{Kind: "OPENERR", Name: a.id.Name, SID: p.SID,
-			Info: "tunnel serving disabled on this node"})
+			Info: err.Error()})
 		a.conn.WriteToUDP(seal(resp), addr)
 		return
 	}
