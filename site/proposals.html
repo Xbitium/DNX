@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Proposals (DNXP) — DNXRoute</title>
+  <meta name="description" content="DNX Proposals: changes to the protocol that are argued in public before they are built. DNXP-0001 replaces the fixed four-level address with variable-length namespace paths." />
+  <meta name="theme-color" content="#0f5f68" />
+  <link rel="canonical" href="https://dnxroute.com/proposals" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="wrap topbar-inner">
+      <div>
+        <div class="kicker"><a href="/">DNXRoute</a></div>
+        <div class="muted">Proposals</div>
+      </div>
+      <nav class="nav">
+        <a href="/learn">Learn</a>
+        <a href="/protocol">Protocol</a>
+        <a href="/compare">Compare</a>
+        <a href="/journal">Journal</a>
+        <a href="https://routing.dnxroute.com">Demo</a>
+        <a href="https://github.com/Xbitium/DNX">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <div class="wrap doc">
+    <aside class="toc">
+      <div class="toc-title">Contents</div>
+      <a href="#process">The process</a>
+      <a href="#index">Index</a>
+      <a href="#p1">DNXP-0001</a>
+      <a href="#p1-motivation">· Motivation</a>
+      <a href="#p1-design">· Design</a>
+      <a href="#p1-scope">· ID scope</a>
+      <a href="#p1-wire">· Wire format</a>
+      <a href="#p1-cost">· What it costs</a>
+      <a href="#p1-open">· Open questions</a>
+      <a href="#p1-migration">· Migration</a>
+    </aside>
+
+    <main>
+      <p class="eyebrow">DNX Proposals</p>
+      <h1 style="font-family:Archivo,sans-serif;font-size:clamp(2rem,5vw,3.2rem);line-height:1.08;letter-spacing:-.02em;margin:.2rem 0 1rem">Changes argued before they are built</h1>
+      <div class="prose">
+        <p>A DNXP is a proposed change to the protocol, written up in enough detail to be disagreed with. The point is that the argument happens before the code, and stays readable afterwards.</p>
+      </div>
+
+      <section id="process" class="section" style="border-top:none;padding-left:0;padding-right:0">
+        <h2>The process</h2>
+        <div class="prose">
+          <p>Two document types, deliberately not three:</p>
+          <ul>
+            <li><strong><a href="/journal">Journal</a></strong> — decisions already made, and the reasoning or the bug that forced them. This is the historical record.</li>
+            <li><strong>DNXP</strong> — a change that has <em>not</em> been decided. It states the problem, the proposed design, what the proposal costs, and what remains unresolved.</li>
+          </ul>
+          <p>A proposal that is accepted and built graduates into the <a href="/protocol">specification</a>, with a journal entry recording why. A proposal that is rejected stays here, marked as such, because the reasoning is often more useful than the outcome.</p>
+        </div>
+        <table class="spec">
+          <thead><tr><th>Status</th><th>Meaning</th></tr></thead>
+          <tbody>
+            <tr><td>Draft</td><td>Under discussion. May change substantially or be withdrawn.</td></tr>
+            <tr><td>Accepted</td><td>Agreed in principle, not yet implemented.</td></tr>
+            <tr><td>Implemented</td><td>Built and merged into the specification.</td></tr>
+            <tr><td>Rejected</td><td>Declined. The reasoning is retained.</td></tr>
+            <tr><td>Superseded</td><td>Replaced by a later proposal.</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="index" class="section" style="padding-left:0;padding-right:0">
+        <h2>Index</h2>
+        <table class="spec">
+          <thead><tr><th>Number</th><th>Title</th><th>Status</th></tr></thead>
+          <tbody>
+            <tr><td><a href="#p1">DNXP-0001</a></td><td>Variable-length namespace paths</td><td><span class="badge draft">Draft</span></td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="p1" class="section" style="padding-left:0;padding-right:0">
+        <h2>DNXP-0001 · Variable-length namespace paths</h2>
+        <div class="prose">
+          <p><strong>Status:</strong> <span class="badge draft">Draft</span> · <strong>Replaces:</strong> the fixed four-field destination address in the current implementation.</p>
+          <p><strong>Summary.</strong> Replace the fixed 256-bit destination — four 64-bit fields for top level, domain, subdomain and host — with a variable-length ordered path of numeric namespace identifiers resolved by the registry. Hierarchy depth becomes unbounded, and no text ever appears on the wire.</p>
+        </div>
+
+        <h3 id="p1-motivation">Motivation</h3>
+        <div class="prose">
+          <p>The current address assumes exactly four levels of hierarchy. That assumption survives contact with small examples and fails immediately on real organisational structure:</p>
+        </div>
+        <pre class="code"><code>printer.office.company            <span class="c">fits — three levels</span>
+api.production.us-east.customer.company   <span class="c">does not fit — five</span>
+vpn.engineering.floor3.buildingA.company  <span class="c">does not fit — five</span></code></pre>
+        <div class="prose">
+          <p>A protocol in which adding an organisational level requires changing the packet format has a structural problem, not a configuration problem. Four was chosen because it made every forwarding decision a fixed-offset comparison — an implementation convenience promoted into an architectural limit.</p>
+          <p>There is a second motivation. The current scheme derives the lower two fields by truncating a hash of the label to 64 bits. That is convenient and it introduces a <strong>collision</strong> vector: distinct labels can map to the same field value, and a deliberate collision is roughly 2<sup>32</sup> work — hours of commodity hardware. Registry-assigned identifiers remove that class of problem entirely, because identifiers are allocated rather than computed.</p>
+        </div>
+
+        <h3 id="p1-design">Design</h3>
+        <div class="prose">
+          <p>A destination becomes an ordered sequence of namespace identifiers, most significant first, with an explicit count. The registry translates between human names and identifiers; routers never see text.</p>
+        </div>
+        <pre class="code"><code>human      host1.dnx.dnxroute.com
+              │
+registry      ├─ com        → 0x0000_1A2B
+              ├─ dnxroute   → 0x0000_4C19
+              ├─ dnx        → 0x0000_0007
+              └─ host1      → 0x0000_0031
+              │
+wire       [ count = 4 ][ 1A2B ][ 4C19 ][ 0007 ][ 0031 ]</code></pre>
+        <div class="prose">
+          <p>Forwarding is unchanged in character: a router reads the identifier at the level it owns, matches it against its table, and forwards. It still never reads the whole path, and still never reads the payload.</p>
+        </div>
+
+        <h3 id="p1-scope">Should identifiers be globally unique?</h3>
+        <div class="prose">
+          <p>This is the substantive design decision in the proposal, and the recommendation is <strong>parent-scoped</strong>: an identifier need only be unique among its siblings, not across the whole namespace.</p>
+          <p>The argument is that forwarding is inherently top-down. A router responsible for level <em>k</em> only ever sees packets whose levels 0 through <em>k−1</em> have already matched — so the parent context is guaranteed by the time the identifier is interpreted. Ambiguity cannot arise.</p>
+        </div>
+        <table class="spec">
+          <thead><tr><th></th><th>Parent-scoped</th><th>Globally unique</th></tr></thead>
+          <tbody>
+            <tr><td>Allocation</td><td>Purely local — each namespace assigns its own</td><td>Requires global coordination or hashing</td></tr>
+            <tr><td>Identifier size</td><td>Small and dense</td><td>Large, or sparse and collision-prone</td></tr>
+            <tr><td>Governance</td><td>No central allocator needed</td><td>A central allocator, or back to hashing</td></tr>
+            <tr><td>Matching a deep level alone</td><td>Not possible without context</td><td>Possible</td></tr>
+          </tbody>
+        </table>
+        <div class="prose">
+          <p>The last row is the only real cost, and hierarchical forwarding never needs that capability. Both DNS delegation and MPLS label assignment work this way, which is reassuring company.</p>
+          <p>Parent-scoping also dissolves a governance objection raised against DNX repeatedly: that one organisation would end up controlling all naming. If identifiers are allocated locally by each namespace operator, no global allocator exists to be captured.</p>
+        </div>
+
+        <h3 id="p1-wire">Wire format</h3>
+        <div class="prose">
+          <p>Proposed encoding: a one-byte level count followed by that many 32-bit identifiers.</p>
+        </div>
+        <pre class="code"><code>+---------+-----------+-----------+-----+-------------+
+| count   | NID[0]    | NID[1]    | ... | NID[count-1]|
+|  1 byte |  4 bytes  |  4 bytes  |     |   4 bytes   |
++---------+-----------+-----------+-----+-------------+</code></pre>
+        <div class="prose">
+          <p>Thirty-two bits per level allows roughly four billion children under any single parent, which is comfortably beyond the largest existing zones. Sixteen bits was considered and rejected: some top-level zones already contain more than sixty-five thousand children.</p>
+          <p>A pleasant side effect is that the common case gets <em>smaller</em>, not larger:</p>
+        </div>
+        <table class="spec">
+          <thead><tr><th>Depth</th><th>Current fixed address</th><th>Proposed</th></tr></thead>
+          <tbody>
+            <tr><td>3 levels</td><td>32 bytes</td><td>13 bytes</td></tr>
+            <tr><td>4 levels</td><td>32 bytes</td><td>17 bytes</td></tr>
+            <tr><td>8 levels</td><td>impossible</td><td>33 bytes</td></tr>
+            <tr><td>20 levels</td><td>impossible</td><td>81 bytes</td></tr>
+          </tbody>
+        </table>
+
+        <h3 id="p1-cost">What this costs</h3>
+        <div class="prose">
+          <p>The current design supports a specific claim: that a router masks the address at a <em>fixed offset</em> and compares integers — precisely the operation existing routing silicon performs. Variable length weakens that. A router must read the count, then index to the level it owns. Still integer comparison, no longer constant-offset.</p>
+          <p>The counter-argument is that this exact pattern already runs at line rate in production. MPLS forwards variable-depth label stacks in hardware, worldwide, and has for two decades — each hop reading only the top label. "Variable-depth stack of small identifiers, each hop reading one" describes MPLS and this proposal equally well.</p>
+          <p>Adopting this proposal therefore obliges the specification to answer a question it currently avoids: <em>how is DNX different from MPLS?</em> The honest answer is that MPLS labels are locally significant, signalled per path, and carry no identity, whereas these identifiers are namespace-derived, meaningful within their parent everywhere, and bound to keys. That difference should be argued explicitly rather than assumed.</p>
+        </div>
+
+        <h3 id="p1-open">Open questions</h3>
+        <div class="prose">
+          <ul>
+            <li><strong>Identifier reuse.</strong> If a namespace is deleted and its identifier later reassigned, packets in flight or held in stale tables could route to the wrong destination. A generation counter or a mandatory retirement period is probably required. Unresolved.</li>
+            <li><strong>Diagnosis.</strong> With only opaque numbers on the wire, a misrouted packet cannot be understood without registry lookups. Something equivalent to reverse resolution is needed before anyone can debug a live network. Unresolved.</li>
+            <li><strong>Table population.</strong> Routers must learn which identifiers map to which next hop. Today those tables are configured by hand. This proposal does not address how they would be distributed, which remains the largest unbuilt piece of the routing design.</li>
+            <li><strong>Depth limits.</strong> A one-byte count permits 255 levels. Whether an explicit lower cap should be enforced, to bound worst-case forwarding work, is undecided.</li>
+          </ul>
+        </div>
+
+        <h3 id="p1-migration">Migration</h3>
+        <div class="prose">
+          <p>This is a breaking change to the routed frame format. The migration path follows the pattern already used elsewhere in DNX, where formats are distinguished by their first byte and coexist during transition:</p>
+          <ol>
+            <li>Implement the new path format alongside the existing fixed address, under a distinct frame marker.</li>
+            <li>Run both on the live network, with routers accepting either.</li>
+            <li>Move the public demonstration to the new format once it has been exercised.</li>
+            <li>Remove the fixed-address path.</li>
+          </ol>
+          <p>The current live routing demonstration will remain on the fixed four-field format until the replacement has been tested, on the principle that a working demonstration should not be broken to make room for an untested one.</p>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <footer class="wrap footer">
+    <span>DNXRoute · Proposals</span>
+    <span>Disagreement is the point · <a href="https://github.com/Xbitium/DNX">GitHub</a></span>
+  </footer>
+</body>
+</html>
