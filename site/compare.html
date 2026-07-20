@@ -66,6 +66,45 @@
             <tr><td>To argue about how addressing should work</td><td>DNX</td></tr>
           </tbody>
         </table>
+        <figure class="diagram">
+          <svg viewBox="0 0 880 292" role="img" aria-label="A four-layer stack showing where each system inserts identity.">
+            <defs><marker id="ac" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M1 1 L9 5 L1 9" fill="none" stroke="#0f5f68" stroke-width="1.6" /></marker></defs>
+
+            <rect class="svg-box" x="30" y="26" width="270" height="52" />
+            <text class="svg-strong" x="50" y="50">Application</text>
+            <text class="svg-sub" x="50" y="68">http, ssh, anything</text>
+
+            <rect class="svg-box" x="30" y="86" width="270" height="52" />
+            <text class="svg-strong" x="50" y="110">Transport</text>
+            <text class="svg-sub" x="50" y="128">TCP, UDP</text>
+
+            <rect class="svg-box-accent" x="30" y="146" width="270" height="52" />
+            <text class="svg-strong" x="50" y="170">Addressing</text>
+            <text class="svg-sub" x="50" y="188">IP, or DNX names</text>
+
+            <rect class="svg-box" x="30" y="206" width="270" height="52" />
+            <text class="svg-strong" x="50" y="230">Link</text>
+            <text class="svg-sub" x="50" y="248">ethernet, wifi</text>
+
+            <path class="svg-arrow" d="M304,52 L338,52" marker-end="url(#ac)" />
+            <text class="svg-strong" x="348" y="48">TLS</text>
+            <text class="svg-sub" x="348" y="66">identity added above, with its own trust system</text>
+
+            <path class="svg-arrow" d="M304,112 L338,112" marker-end="url(#ac)" />
+            <text class="svg-strong" x="348" y="108">WireGuard, Tailscale</text>
+            <text class="svg-sub" x="348" y="126">identity at the tunnel, addresses assigned separately</text>
+
+            <path class="svg-arrow" d="M304,172 L338,172" marker-end="url(#ac)" />
+            <text class="svg-strong" x="348" y="168">DNX</text>
+            <text class="svg-sub" x="348" y="186">identity is part of the address itself</text>
+
+            <path class="svg-arrow" d="M304,232 L338,232" marker-end="url(#ac)" />
+            <text class="svg-strong" x="348" y="228">IP alone</text>
+            <text class="svg-sub" x="348" y="246">no identity — an address proves nothing about who answered</text>
+          </svg>
+          <figcaption>Every system here solves identity. The disagreement is about which layer should own it.</figcaption>
+        </figure>
+
         <div class="callout">
           <div class="t">The one-line difference</div>
           <p>Everything below treats the name as a lookup key that resolves to a locator. DNX treats the <strong>name hierarchy itself as the routing topology</strong> — and binds identity into the address rather than layering it above.</p>

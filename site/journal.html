@@ -84,6 +84,37 @@
           <p>The receiver believes it announced space. The sender is waiting to be told. Neither will speak again. A test was written specifically to provoke that sequence, and it deadlocked exactly as feared.</p>
           <p>The fix is TCP's persist timer: periodically probe a closed window so the reply carries the current state. Verified by disabling the probe and confirming the test fails, then re-enabling it and confirming recovery — because a passing test proves nothing unless you have watched it fail.</p>
         </div>
+        <figure class="diagram">
+          <svg viewBox="0 0 880 320" role="img" aria-label="A lost window update leaves sender and receiver waiting on each other until a probe breaks the stalemate.">
+            <defs><marker id="aj4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M1 1 L9 5 L1 9" fill="none" stroke="#0f5f68" stroke-width="1.6" /></marker></defs>
+
+            <text class="svg-strong" x="40" y="26">sender</text>
+            <text class="svg-strong" x="700" y="26">receiver</text>
+            <path class="svg-line" d="M70,36 L70,286" />
+            <path class="svg-line" d="M730,36 L730,286" />
+
+            <path class="svg-arrow" d="M726,64 L76,64" marker-end="url(#aj4)" />
+            <text class="svg-sub" x="180" y="56">buffer full — my window is zero</text>
+
+            <rect class="svg-box-dim" x="76" y="82" width="220" height="34" />
+            <text class="svg-sub" x="94" y="104">sender parks, waiting</text>
+
+            <path class="svg-arrow" d="M726,150 L420,150" marker-end="url(#aj4)" />
+            <text class="svg-sub" x="440" y="142">app reads — window reopened</text>
+            <text class="svg-strong" x="330" y="156">✕ lost</text>
+
+            <rect class="svg-box-dim" x="76" y="176" width="654" height="34" />
+            <text class="svg-sub" x="94" y="198">deadlock — receiver believes it announced space; sender is still waiting to be told</text>
+
+            <path class="svg-arrow" d="M76,242 L726,242" marker-end="url(#aj4)" />
+            <text class="svg-sub" x="200" y="234">persist timer: probe the closed window</text>
+
+            <path class="svg-arrow" d="M726,278 L76,278" marker-end="url(#aj4)" />
+            <text class="svg-sub" x="200" y="270">reply carries the current window — transfer resumes</text>
+          </svg>
+          <figcaption>Every frame carries the sender's window, so any reply breaks the stalemate. The bug was never asking.</figcaption>
+        </figure>
+
         <div class="callout">
           <div class="t">Rule extracted</div>
           <p>A reliability layer is only as good as the failures you deliberately caused. Every impairment in the test harness was also checked for whether it was actually firing — an early version silently under-counted reordered packets, which would have made the tests look stronger than they were.</p>
@@ -109,6 +140,40 @@
           <p>The correct rule is that <strong>a router responsible for a level is authoritative for its children</strong>. If the gateway for an authority has no route for a site beneath it, no router closer to the root knows better. The packet should be dropped there, definitively, in one hop.</p>
           <p>This is the entire reason for building a proof of concept rather than writing a specification and calling it designed. The bug was in a diagram that was going to be published.</p>
         </div>
+        <figure class="diagram">
+          <svg viewBox="0 0 880 268" role="img" aria-label="The broken behaviour oscillated between two routers; the fix drops the packet definitively.">
+            <defs><marker id="aj2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M1 1 L9 5 L1 9" fill="none" stroke="#0f5f68" stroke-width="1.6" /></marker></defs>
+
+            <text class="svg-sub" x="30" y="24">BEFORE — ascend on no match</text>
+            <rect class="svg-box" x="30" y="36" width="150" height="46" />
+            <text class="svg-label" x="52" y="64">core</text>
+            <path class="svg-arrow" d="M184,59 L226,59" marker-end="url(#aj2)" />
+            <rect class="svg-box" x="230" y="36" width="150" height="46" />
+            <text class="svg-label" x="252" y="64">region hub</text>
+            <path class="svg-arrow" d="M384,59 L426,59" marker-end="url(#aj2)" />
+            <rect class="svg-box" x="430" y="36" width="170" height="46" />
+            <text class="svg-label" x="452" y="64">authority gw</text>
+            <path class="svg-arrow" d="M515,32 C500,2 330,2 305,32" marker-end="url(#aj2)" />
+            <text class="svg-sub" x="620" y="52">no match, so it ascends…</text>
+            <text class="svg-sub" x="620" y="70">…and is sent right back down.</text>
+
+            <text class="svg-sub" x="30" y="150">AFTER — authoritative drop</text>
+            <rect class="svg-box" x="30" y="162" width="150" height="46" />
+            <text class="svg-label" x="52" y="190">core</text>
+            <path class="svg-arrow" d="M184,185 L226,185" marker-end="url(#aj2)" />
+            <rect class="svg-box" x="230" y="162" width="150" height="46" />
+            <text class="svg-label" x="252" y="190">region hub</text>
+            <path class="svg-arrow" d="M384,185 L426,185" marker-end="url(#aj2)" />
+            <rect class="svg-box-accent" x="430" y="162" width="170" height="46" />
+            <text class="svg-label" x="452" y="190">authority gw</text>
+            <path class="svg-arrow" d="M604,185 L646,185" marker-end="url(#aj2)" />
+            <rect class="svg-box-dim" x="650" y="162" width="120" height="46" />
+            <text class="svg-label" x="672" y="190">dropped</text>
+            <text class="svg-sub" x="30" y="240">The gateway owns that level, so if it has no route, nothing closer to the root does either.</text>
+          </svg>
+          <figcaption>One hop, one decision, no oscillation. The hop limit was hiding the bug, not preventing it.</figcaption>
+        </figure>
+
         <div class="callout warn">
           <div class="t">Rule extracted</div>
           <p>"Forward it upward and let someone smarter decide" is not a routing policy. It is a loop with extra steps.</p>
