@@ -30,10 +30,14 @@ import (
 	"strings"
 )
 
+// Addr is a DNX 256-bit address as four 64-bit fields, most-significant first.
+//
+//	Field[0] = TLD, Field[1] = domain, Field[2] = subdomain, Field[3] = host
 type Addr struct {
 	Field [4]uint64
 }
 
+// Field indices, named for clarity.
 const (
 	TLD = iota
 	Domain
@@ -41,6 +45,7 @@ const (
 	Host
 )
 
+// FieldName labels a field index for human output.
 func FieldName(i int) string {
 	switch i {
 	case TLD:
@@ -60,13 +65,18 @@ func FieldName(i int) string {
 // (the IANA-of-DNX). Here it is an in-memory map, which is all the PoC needs
 // to demonstrate that assignment — not hashing — is what yields aggregation.
 type Registry struct {
-	tld    map[string]uint64
-	domain map[string]uint64
+	tld    map[string]uint64 // ".com" -> assigned 64-bit block
+	domain map[string]uint64 // "dnxroute" -> assigned 64-bit value
 }
 
+// NewRegistry seeds an allocation authority. Note how the ASSIGNED values are
+// deliberate and grouped — that deliberateness is exactly what hashing can't
+// give you, and exactly what makes cores aggregate.
 func NewRegistry() *Registry {
 	return &Registry{
 		tld: map[string]uint64{
+			// Top tier blocks. Deliberately spaced so related TLDs can share
+			// a core route via masking (e.g. all gov-adjacent under one range).
 			"com": 0x0000_0001_0000_0000,
 			"gov": 0x0000_0002_0000_0000,
 			"mil": 0x0000_0003_0000_0000,
@@ -81,28 +91,38 @@ func NewRegistry() *Registry {
 	}
 }
 
+// AssignTLD / AssignDomain let the PoC add allocations.
 func (r *Registry) AssignTLD(label string, v uint64)    { r.tld[label] = v }
 func (r *Registry) AssignDomain(label string, v uint64) { r.domain[label] = v }
 
+// hash64 derives a 64-bit field from a label: truncate(SHA-256(label)).
+// Used for the self-service tiers (subdomain, host).
 func hash64(label string) uint64 {
 	sum := sha256.Sum256([]byte(strings.ToLower(label)))
 	return binary.BigEndian.Uint64(sum[:8])
 }
 
 // FromName maps a human FQDN to its 256-bit DNX address using the hybrid rule.
+//
+//	"host1.disa.dnxroute.com"
+//	 host   sub    domain  TLD     (DNS order: small -> big)
+//
+// We read the FQDN right-to-left into fields TLD, domain, subdomain, host.
 // TLD and domain come from the registry (assigned); subdomain and host are
-// hashed. Missing tiers are zero.
+// hashed. Missing tiers are zero (e.g. a name with no subdomain).
 func (r *Registry) FromName(fqdn string) (Addr, error) {
-	labels := splitFQDN(fqdn)
+	labels := splitFQDN(fqdn) // small -> big
 	if len(labels) < 2 {
 		return Addr{}, fmt.Errorf("name %q needs at least domain.tld", fqdn)
 	}
+	// Reverse into big -> small so index aligns with fields.
 	n := len(labels)
 	tldLabel := labels[n-1]
 	domainLabel := labels[n-2]
 
 	var a Addr
 
+	// --- assigned tiers ---
 	tv, ok := r.tld[tldLabel]
 	if !ok {
 		return Addr{}, fmt.Errorf("TLD %q is not allocated by the DNX registry", tldLabel)
@@ -115,14 +135,17 @@ func (r *Registry) FromName(fqdn string) (Addr, error) {
 	}
 	a.Field[Domain] = dv
 
+	// --- hashed tiers (self-service) ---
+	// Anything between host and domain is subdomain; the first label is host.
 	if n >= 3 {
-		a.Field[Subdomain] = hash64(labels[n-3])
+		a.Field[Subdomain] = hash64(labels[n-3]) // the label just below domain
 	}
-	a.Field[Host] = hash64(labels[0])
+	a.Field[Host] = hash64(labels[0]) // the leftmost label is the host
 
 	return a, nil
 }
 
+// splitFQDN returns dot-separated labels, small->big, trimming empties.
 func splitFQDN(fqdn string) []string {
 	var out []string
 	for _, l := range strings.Split(strings.TrimSpace(fqdn), ".") {
@@ -133,6 +156,10 @@ func splitFQDN(fqdn string) []string {
 	return out
 }
 
+// ---------------------------------------------------------------------------
+// Fixed-width forwarding operations — the whole point
+// ---------------------------------------------------------------------------
+
 // FieldAt returns the 64-bit value a router at tier `depth` matches on.
 // depth 0 = TLD (core), 3 = host (leaf). This is the ONLY read a router does.
 func (a Addr) FieldAt(depth int) uint64 {
@@ -142,16 +169,19 @@ func (a Addr) FieldAt(depth int) uint64 {
 	return a.Field[depth]
 }
 
+// String renders the address as four hex fields, big->small.
 func (a Addr) String() string {
 	return fmt.Sprintf("%016x:%016x:%016x:%016x",
 		a.Field[TLD], a.Field[Domain], a.Field[Subdomain], a.Field[Host])
 }
 
+// Pretty renders the address with tier labels for the forwarding trace.
 func (a Addr) Pretty() string {
 	return fmt.Sprintf("TLD=%016x domain=%016x sub=%016x host=%016x",
 		a.Field[TLD], a.Field[Domain], a.Field[Subdomain], a.Field[Host])
 }
 
+// Bytes serializes the 256-bit address to 32 bytes (wire form).
 func (a Addr) Bytes() []byte {
 	b := make([]byte, 32)
 	for i := 0; i < 4; i++ {

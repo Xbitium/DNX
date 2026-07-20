@@ -37,27 +37,34 @@ import (
 	"dnx/internal/secure"
 )
 
+// agent bundles all node state.
 type agent struct {
 	id   *identity.Identity
-	conn *net.UDPConn
+	conn *net.UDPConn // the ONE shared UDP socket
 
 	mu      sync.Mutex
-	regAddr *net.UDPAddr
-	public  string
-	waiters map[string]chan *proto.Message
+	regAddr *net.UDPAddr                  // resolved registry address
+	public  string                        // our own public endpoint (learned from REGISTER_ACK)
+	waiters map[string]chan *proto.Message // nonce/kind -> response channel
 
+	// ---- v0.2 session layer ----
 	// One live encrypted session per peer NAME (not per address — the
 	// address can change under NAT; the name and key never do).
-	sessions map[string]*peerSession
+	sessions map[string]*peerSession // peer FQDN -> session
+
+	// ---- v0.2 tunnels: TCP carried over DNX streams ----
+	tunnels     *tunnelTable
+	tunnelServe bool // whether we accept inbound tunnel OPENs
 }
 
+// peerSession is a live encrypted channel plus what we need to rebuild it.
 type peerSession struct {
-	sess      *secure.Session
-	eph       *secure.Ephemeral
-	addr      *net.UDPAddr
-	nonceA    string
-	done      chan struct{}
-	err       error
+	sess *secure.Session // nil while a handshake is in flight
+	eph  *secure.Ephemeral
+	addr *net.UDPAddr // peer's current endpoint
+	nonceA string     // initiator nonce for the in-flight handshake
+	done chan struct{} // closed when the session becomes usable
+	err  error
 	initiator bool
 }
 
@@ -65,8 +72,11 @@ func main() {
 	name := flag.String("name", "", "this node's FQDN (first boot only), e.g. computer1.internal.dnxroute.com")
 	registry := flag.String("registry", "", "registry host:port (default registry.dnxroute.com:4400)")
 	api := flag.String("api", "127.0.0.1:4401", "localhost control API for the dnx CLI")
+	allowTunnel := flag.Bool("allow-tunnel", false,
+		"accept inbound tunnel requests from peers (exposes local TCP ports to named peers)")
 	flag.Parse()
 
+	// ---- Identity: load existing or mint on first boot ----
 	id, err := identity.LoadOrCreate(*name, *registry)
 	if err != nil {
 		log.Fatalf("identity: %v", err)
@@ -74,7 +84,8 @@ func main() {
 	log.Printf("I am %s (key %.12s…)", id.Name, id.PubB64)
 	log.Printf("registry: %s", id.Registry)
 
-	conn, err := net.ListenUDP("udp", &net.UDPAddr{Port: 0})
+	// ---- The one shared UDP socket (see design note above) ----
+	conn, err := net.ListenUDP("udp", &net.UDPAddr{Port: 0}) // OS picks a port
 	if err != nil {
 		log.Fatalf("udp: %v", err)
 	}
@@ -83,21 +94,27 @@ func main() {
 		id:       id,
 		conn:     conn,
 		waiters:  map[string]chan *proto.Message{},
-		sessions: map[string]*peerSession{},
+		sessions:    map[string]*peerSession{}, // v0.2: encrypted channels, keyed by peer NAME
+		tunnels:     newTunnelTable(),
+		tunnelServe: *allowTunnel,
+	}
+	if *allowTunnel {
+		log.Printf("tunnel serving ENABLED — named peers may reach local TCP ports on this host")
 	}
 	if err := a.resolveRegistry(); err != nil {
 		log.Fatalf("cannot resolve registry %s: %v", id.Registry, err)
 	}
 
-	go a.readLoop()
-	go a.heartbeatLoop()
-	go a.rekeyLoop()
-	a.serveAPI(*api)
+	go a.readLoop()      // dispatch every inbound packet
+	go a.heartbeatLoop() // REGISTER every 15s (keeps NAT warm + endpoint fresh)
+	go a.rekeyLoop()     // v0.2: expire sessions every 5 min (forward secrecy)
+	go a.tunnelTickLoop() // v0.2: drive stream retransmission timers
+	a.serveAPI(*api)     // blocks: localhost HTTP for the CLI
 }
 
 // resolveRegistry turns "registry.dnxroute.com:4400" into a UDP addr.
-// The registry itself is found via legacy DNS for bootstrap — the ONLY
-// place old-world DNS appears; everything after is DNX.
+// (Yes — the registry itself is found via legacy DNS for bootstrap.
+// That's the ONLY place old-world DNS appears; everything after is DNX.)
 func (a *agent) resolveRegistry() error {
 	addr, err := net.ResolveUDPAddr("udp", a.id.Registry)
 	if err != nil {
@@ -109,6 +126,9 @@ func (a *agent) resolveRegistry() error {
 	return nil
 }
 
+// ---------------------------------------------------------------------------
+// Inbound packet dispatch
+// ---------------------------------------------------------------------------
 func (a *agent) readLoop() {
 	buf := make([]byte, 64*1024)
 	for {
@@ -117,6 +137,8 @@ func (a *agent) readLoop() {
 			log.Printf("read: %v", err)
 			continue
 		}
+		// ---- v0.2: is this a SEALED binary frame or a v0.1 JSON control message?
+		// They coexist on one socket: sealed frames start with 0xD8, JSON with '{'.
 		if secure.IsSealed(buf[:n]) {
 			a.handleSealed(src, append([]byte(nil), buf[:n]...))
 			continue
@@ -124,11 +146,12 @@ func (a *agent) readLoop() {
 
 		m, err := proto.Decode(buf[:n])
 		if err != nil {
-			continue
+			continue // not a DNX packet
 		}
 
 		switch m.Kind {
 
+		// ---- v0.2 handshake: someone wants an encrypted channel with us ----
 		case proto.KindHSInit:
 			a.handleHSInit(src, m)
 
@@ -136,6 +159,7 @@ func (a *agent) readLoop() {
 			a.handleHSResp(src, m)
 
 		case proto.KindRegisterAck:
+			// Learn (and log once) our own public endpoint — STUN for free.
 			a.mu.Lock()
 			if a.public != m.Endpoint {
 				a.public = m.Endpoint
@@ -144,6 +168,8 @@ func (a *agent) readLoop() {
 			a.mu.Unlock()
 
 		case proto.KindPunch:
+			// Someone wants to reach us. Fire a burst at their endpoint —
+			// each outbound packet opens our NAT for their inbound ones.
 			peer, err := net.ResolveUDPAddr("udp", m.Endpoint)
 			if err != nil {
 				continue
@@ -154,21 +180,27 @@ func (a *agent) readLoop() {
 			}
 
 		case proto.KindPing:
+			// Signed liveness probe from a peer — verify would need their
+			// key (a resolve); v0.1 answers and lets the CALLER verify our
+			// signed PONG instead. Echo the nonce so they can match + time it.
 			resp := &proto.Message{
 				Kind:  proto.KindPong,
 				Name:  a.id.Name,
 				Nonce: m.Nonce,
 				TS:    time.Now().UnixMilli(),
 			}
-			resp.Sign(a.id.Priv())
+			resp.Sign(a.id.Priv()) // prove we hold computer2's key
 			a.send(src, resp)
 
 		case proto.KindPong, proto.KindResolveResp, proto.KindError:
+			// Responses: route to whichever operation is waiting on them.
 			a.deliver(m)
 		}
 	}
 }
 
+// deliver hands a response to the waiting operation (keyed by nonce,
+// falling back to kind+target for resolve responses).
 func (a *agent) deliver(m *proto.Message) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -177,13 +209,14 @@ func (a *agent) deliver(m *proto.Message) {
 		if ch, ok := a.waiters[k]; ok && k != "" && k != "|" {
 			select {
 			case ch <- m:
-			default:
+			default: // waiter already satisfied — drop duplicates
 			}
 			return
 		}
 	}
 }
 
+// wait registers interest in a response key and returns a channel.
 func (a *agent) wait(key string) chan *proto.Message {
 	ch := make(chan *proto.Message, 4)
 	a.mu.Lock()
@@ -198,6 +231,9 @@ func (a *agent) unwait(key string) {
 	a.mu.Unlock()
 }
 
+// ---------------------------------------------------------------------------
+// Heartbeat: REGISTER every 15s
+// ---------------------------------------------------------------------------
 func (a *agent) heartbeatLoop() {
 	for {
 		m := &proto.Message{
@@ -212,24 +248,27 @@ func (a *agent) heartbeatLoop() {
 		reg := a.regAddr
 		a.mu.Unlock()
 		a.send(reg, m)
-		time.Sleep(15 * time.Second)
+		time.Sleep(15 * time.Second) // < typical 30s NAT UDP timeout
 	}
 }
 
+// ---------------------------------------------------------------------------
 // The headline act: ping a peer BY NAME.
 // resolve -> intro (punch) -> signed ping burst -> verified pong -> RTT
+// ---------------------------------------------------------------------------
 type pingResult struct {
 	Target      string  `json:"target"`
 	RTTms       float64 `json:"rtt_ms"`
-	Verified    bool    `json:"identity_verified"`
-	Encrypted   bool    `json:"encrypted"`
-	HandshakeMs float64 `json:"handshake_ms,omitempty"`
+	Verified    bool    `json:"identity_verified"`      // key matches the registry's name binding
+	Encrypted   bool    `json:"encrypted"`              // v0.2: payload was sealed (ChaCha20-Poly1305)
+	HandshakeMs float64 `json:"handshake_ms,omitempty"` // 0 on a warm session (reused)
 	Error       string  `json:"error,omitempty"`
 }
 
 func (a *agent) pingByName(target string, timeout time.Duration) pingResult {
 	res := pingResult{Target: target}
 
+	// ---- Step 1: RESOLVE the name at the registry ----
 	rkey := proto.KindResolveResp + "|" + target
 	ch := a.wait(rkey)
 	defer a.unwait(rkey)
@@ -263,6 +302,7 @@ func (a *agent) pingByName(target string, timeout time.Duration) pingResult {
 		return res
 	}
 
+	// ---- Step 2: INTRO — ask registry to make the peer punch back ----
 	in := &proto.Message{
 		Kind: proto.KindIntro, Name: a.id.Name, Target: target,
 		TS: time.Now().UnixMilli(), Nonce: newNonce(),
@@ -270,13 +310,14 @@ func (a *agent) pingByName(target string, timeout time.Duration) pingResult {
 	in.Sign(a.id.Priv())
 	a.send(reg, in)
 
+	// ---- Step 3: signed PING burst until a PONG lands ----
 	nonce := newNonce()
 	pch := a.wait(nonce)
 	defer a.unwait(nonce)
 
 	start := time.Now()
 	deadline := start.Add(timeout)
-	tick := time.NewTicker(300 * time.Millisecond)
+	tick := time.NewTicker(300 * time.Millisecond) // retry cadence during punch
 	defer tick.Stop()
 
 	sendPing := func() {
@@ -292,6 +333,10 @@ func (a *agent) pingByName(target string, timeout time.Duration) pingResult {
 	for {
 		select {
 		case m := <-pch:
+			// ---- Step 4: verify the pong is signed by the RESOLVED key.
+			// This is the DNX difference vs ICMP ping: we didn't just reach
+			// "some host at an address" — we cryptographically confirmed we
+			// reached the machine that OWNS the name.
 			res.RTTms = float64(time.Since(start).Microseconds()) / 1000.0
 			res.Verified = m.Verify(peerKey) == nil
 			if !res.Verified {
@@ -303,14 +348,18 @@ func (a *agent) pingByName(target string, timeout time.Duration) pingResult {
 				res.Error = "ping timeout (peer offline or NAT unpunchable — v0.2 adds relay fallback)"
 				return res
 			}
-			sendPing()
+			sendPing() // keep punching
 		}
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Localhost control API (for the dnx CLI)
+// ---------------------------------------------------------------------------
 func (a *agent) serveAPI(listen string) {
 	mux := http.NewServeMux()
 
+	// GET /ping?name=<fqdn> -> v0.2 ENCRYPTED ping (handshake + sealed payload)
 	mux.HandleFunc("/ping", func(w http.ResponseWriter, r *http.Request) {
 		target := r.URL.Query().Get("name")
 		if target == "" {
@@ -320,8 +369,8 @@ func (a *agent) serveAPI(listen string) {
 		writeJSON(w, a.pingEncrypted(target, 12*time.Second))
 	})
 
-	// v0.1 signed-but-plaintext ping, kept so we can tcpdump both and SEE
-	// the difference on the wire.
+	// GET /ping-plain?name=<fqdn> -> v0.1 signed-but-plaintext ping.
+	// Kept so we can tcpdump both and SEE the difference on the wire.
 	mux.HandleFunc("/ping-plain", func(w http.ResponseWriter, r *http.Request) {
 		target := r.URL.Query().Get("name")
 		if target == "" {
@@ -329,6 +378,29 @@ func (a *agent) serveAPI(listen string) {
 			return
 		}
 		writeJSON(w, a.pingByName(target, 8*time.Second))
+	})
+
+	// GET /status -> who am I, where am I, who do I trust
+	// POST /tunnel?name=<fqdn>&local=<port>&remote=<port>
+	// Opens a local TCP listener whose traffic rides DNX to the peer.
+	mux.HandleFunc("/tunnel", func(w http.ResponseWriter, r *http.Request) {
+		name := r.URL.Query().Get("name")
+		var local, remote int
+		fmt.Sscanf(r.URL.Query().Get("local"), "%d", &local)
+		fmt.Sscanf(r.URL.Query().Get("remote"), "%d", &remote)
+		if name == "" || local == 0 || remote == 0 {
+			writeJSON(w, map[string]string{"error": "need ?name=<fqdn>&local=<port>&remote=<port>"})
+			return
+		}
+		if err := a.serveTunnel(name, local, remote); err != nil {
+			writeJSON(w, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, map[string]any{
+			"listening": fmt.Sprintf("127.0.0.1:%d", local),
+			"peer":      name,
+			"peer_port": remote,
+		})
 	})
 
 	mux.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
@@ -339,13 +411,15 @@ func (a *agent) serveAPI(listen string) {
 			"name":            a.id.Name,
 			"pubkey":          a.id.PubB64,
 			"registry":        a.id.Registry,
-			"public_endpoint": pub,
+			"public_endpoint": pub, // shown here for debugging ONLY — users live in names
 		})
 	})
 
 	log.Printf("control API on http://%s (dnx CLI talks here)", listen)
 	log.Fatal(http.ListenAndServe(listen, mux))
 }
+
+// ---- tiny helpers ----
 
 func (a *agent) send(to *net.UDPAddr, m *proto.Message) {
 	a.conn.WriteToUDP(proto.Encode(m), to)

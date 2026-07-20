@@ -21,14 +21,15 @@ import (
 // fieldTable maps a 64-bit field value to a next hop, for ONE router at one
 // tier depth. The DNX FIB, now numeric. Size = distinct children = O(children).
 type fieldTable struct {
-	depth   int
-	entries map[uint64]string
+	depth   int               // which 64-bit field this router matches (0=TLD..3=host)
+	entries map[uint64]string // field value -> next hop
 }
 
 func newFieldTable(depth int) *fieldTable      { return &fieldTable{depth: depth, entries: map[uint64]string{}} }
 func (t *fieldTable) add(v uint64, hop string) { t.entries[v] = hop }
 func (t *fieldTable) size() int                { return len(t.entries) }
 
+// router: a name, the tier field it matches, its numeric table, its links.
 type router struct {
 	name  string
 	table *fieldTable
@@ -47,6 +48,7 @@ func (r *router) link(fieldVal uint64, hopName string, neighbor *router) {
 
 const hopLocal = ":local"
 
+// hop is one line of the forwarding trace.
 type hop struct {
 	Router     string  `json:"router"`
 	Depth      int     `json:"field_depth"`
@@ -71,7 +73,7 @@ func (n *network) forward(a dnxaddr.Addr, sealed []byte) ([]hop, bool) {
 		field := a.FieldAt(depth) // THE ONLY READ: mask to this router's 64 bits
 
 		t0 := time.Now()
-		hopName, ok := cur.table.entries[field]
+		hopName, ok := cur.table.entries[field] // one integer map lookup
 		dt := time.Since(t0)
 
 		h := hop{

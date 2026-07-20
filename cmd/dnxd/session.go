@@ -26,26 +26,42 @@ import (
 	"dnx/internal/secure"
 )
 
+// sealedPayload is what travels INSIDE an encrypted frame.
+// v0.1 sent this as plaintext JSON; v0.2 seals it. Same semantics,
+// now confidential. (v0.3 will carry stream data here too.)
 type sealedPayload struct {
-	Kind  string `json:"k"`
-	Name  string `json:"n"`
-	Nonce string `json:"x,omitempty"`
+	Kind  string `json:"k"`           // "PING"|"PONG"|"OPEN"|"OPENOK"|"OPENERR"
+	Name  string `json:"n"`           // sender's FQDN
+	Nonce string `json:"x,omitempty"` // echoed for RTT matching
 	TS    int64  `json:"t,omitempty"`
+
+	// ---- tunnel control (see tunnel.go) ----
+	SID  uint32 `json:"s,omitempty"` // stream id, scoped to this session
+	Port int    `json:"p,omitempty"` // target TCP port for OPEN
+	Info string `json:"i,omitempty"` // error detail for OPENERR
 }
+
+// ---------------------------------------------------------------------------
+// Establishing a session (initiator side)
+// ---------------------------------------------------------------------------
 
 // getSession returns a usable encrypted session with peerName, performing a
 // handshake if none exists or the existing one has expired (5-minute rekey).
+// peerIDKey is the ed25519 key the REGISTRY bound to that name — this is what
+// makes the session trustworthy.
 func (a *agent) getSession(peerName, peerIDKey string, peerAddr *net.UDPAddr, timeout time.Duration) (*secure.Session, error) {
 	a.mu.Lock()
 	ps, ok := a.sessions[peerName]
 
+	// Reuse a live, unexpired session.
 	if ok && ps.sess != nil && !ps.sess.Expired() {
 		s := ps.sess
-		ps.addr = peerAddr
+		ps.addr = peerAddr // endpoint may have moved under NAT; name/key did not
 		a.mu.Unlock()
 		return s, nil
 	}
 
+	// A handshake is already in flight — wait for it instead of starting a second.
 	if ok && ps.sess == nil && ps.done != nil {
 		done := ps.done
 		a.mu.Unlock()
@@ -62,6 +78,7 @@ func (a *agent) getSession(peerName, peerIDKey string, peerAddr *net.UDPAddr, ti
 		}
 	}
 
+	// ---- Start a fresh handshake (we are the INITIATOR) ----
 	eph, err := secure.NewEphemeral()
 	if err != nil {
 		a.mu.Unlock()
@@ -78,12 +95,13 @@ func (a *agent) getSession(peerName, peerIDKey string, peerAddr *net.UDPAddr, ti
 	done := ps.done
 	a.mu.Unlock()
 
+	// HS_INIT: our ephemeral X25519 key, SIGNED by our long-term identity key.
 	ts := time.Now().UnixMilli()
 	msg := &proto.Message{
 		Kind:   proto.KindHSInit,
 		Name:   a.id.Name,
 		Target: peerName,
-		PubKey: a.id.PubB64,
+		PubKey: a.id.PubB64, // so the peer can verify us without a registry round-trip
 		EphPub: secure.EncodeEphPub(eph.Pub),
 		Nonce:  ps.nonceA,
 		TS:     ts,
@@ -93,6 +111,7 @@ func (a *agent) getSession(peerName, peerIDKey string, peerAddr *net.UDPAddr, ti
 
 	log.Printf("handshake -> %s (initiating encrypted session)", peerName)
 
+	// Retry the INIT: the first packets also serve as NAT punch traffic.
 	go func() {
 		tick := time.NewTicker(400 * time.Millisecond)
 		defer tick.Stop()
@@ -123,6 +142,7 @@ func (a *agent) getSession(peerName, peerIDKey string, peerAddr *net.UDPAddr, ti
 		}
 	}()
 
+	// Wait for handleHSResp to complete the session.
 	select {
 	case <-done:
 		a.mu.Lock()
@@ -136,12 +156,21 @@ func (a *agent) getSession(peerName, peerIDKey string, peerAddr *net.UDPAddr, ti
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Responder side: someone wants an encrypted channel with US
+// ---------------------------------------------------------------------------
+
 func (a *agent) handleHSInit(src *net.UDPAddr, m *proto.Message) {
+	// 1. Replay window.
 	if !secure.FreshTS(m.TS) {
 		log.Printf("HS_INIT from %s rejected: stale timestamp", m.Name)
 		return
 	}
 
+	// 2. Verify the initiator SIGNED this ephemeral key with the identity key
+	//    it claims. (v0.2 note: we trust the pubkey carried in the message for
+	//    now; the ping path independently verifies it against the REGISTRY's
+	//    binding, which is what actually ties key -> name.)
 	ephPub, err := secure.DecodeEphPub(m.EphPub)
 	if err != nil {
 		log.Printf("HS_INIT from %s rejected: %v", m.Name, err)
@@ -153,12 +182,13 @@ func (a *agent) handleHSInit(src *net.UDPAddr, m *proto.Message) {
 		return
 	}
 
+	// 3. Mint our own ephemeral and derive the session.
 	eph, err := secure.NewEphemeral()
 	if err != nil {
 		return
 	}
 	nonceB := secure.NewNonce()
-	sess, err := secure.Derive(eph, ephPub, m.Name, m.PubKey, m.Nonce, nonceB, false)
+	sess, err := secure.Derive(eph, ephPub, m.Name, m.PubKey, m.Nonce, nonceB, false) // responder
 	if err != nil {
 		log.Printf("HS_INIT from %s: key derivation failed: %v", m.Name, err)
 		return
@@ -169,6 +199,8 @@ func (a *agent) handleHSInit(src *net.UDPAddr, m *proto.Message) {
 	a.mu.Unlock()
 	log.Printf("session ESTABLISHED with %s (responder, encrypted)", m.Name)
 
+	// 4. HS_RESP: our ephemeral, echoing THEIR nonce (binds this response to
+	//    this exact handshake), signed by our identity key.
 	ts := time.Now().UnixMilli()
 	resp := &proto.Message{
 		Kind:   proto.KindHSResp,
@@ -176,7 +208,7 @@ func (a *agent) handleHSInit(src *net.UDPAddr, m *proto.Message) {
 		Target: m.Name,
 		PubKey: a.id.PubB64,
 		EphPub: secure.EncodeEphPub(eph.Pub),
-		Nonce:  m.Nonce,
+		Nonce:  m.Nonce, // echo
 		NonceB: nonceB,
 		TS:     ts,
 	}
@@ -191,7 +223,7 @@ func (a *agent) handleHSResp(src *net.UDPAddr, m *proto.Message) {
 	ps, ok := a.sessions[m.Name]
 	if !ok || !ps.initiator || ps.sess != nil {
 		a.mu.Unlock()
-		return
+		return // unsolicited or already done
 	}
 	nonceA := ps.nonceA
 	eph := ps.eph
@@ -200,6 +232,7 @@ func (a *agent) handleHSResp(src *net.UDPAddr, m *proto.Message) {
 	if !secure.FreshTS(m.TS) {
 		return
 	}
+	// The echoed nonce MUST match ours, or this response belongs to another handshake.
 	if m.Nonce != nonceA {
 		log.Printf("HS_RESP from %s rejected: nonce mismatch (replay?)", m.Name)
 		return
@@ -214,7 +247,7 @@ func (a *agent) handleHSResp(src *net.UDPAddr, m *proto.Message) {
 		return
 	}
 
-	sess, err := secure.Derive(eph, ephPub, m.Name, m.PubKey, nonceA, m.NonceB, true)
+	sess, err := secure.Derive(eph, ephPub, m.Name, m.PubKey, nonceA, m.NonceB, true) // initiator
 	if err != nil {
 		return
 	}
@@ -223,16 +256,20 @@ func (a *agent) handleHSResp(src *net.UDPAddr, m *proto.Message) {
 	ps.sess = sess
 	ps.addr = src
 	if ps.done != nil {
-		close(ps.done)
+		close(ps.done) // unblock getSession
 		ps.done = nil
 	}
 	a.mu.Unlock()
 	log.Printf("session ESTABLISHED with %s (initiator, encrypted)", m.Name)
 }
 
+// ---------------------------------------------------------------------------
+// Sealed frames: everything after the handshake
+// ---------------------------------------------------------------------------
+
 // handleSealed decrypts an inbound sealed frame and acts on its payload.
-// We find the right session by ADDRESS since the frame header carries no
-// name — that's the point: sealed frames leak nothing on the wire.
+// We must find the right session by ADDRESS, since the frame header carries
+// no name — that's the point: sealed frames leak nothing on the wire.
 func (a *agent) handleSealed(src *net.UDPAddr, frame []byte) {
 	a.mu.Lock()
 	var ps *peerSession
@@ -244,12 +281,21 @@ func (a *agent) handleSealed(src *net.UDPAddr, frame []byte) {
 	}
 	a.mu.Unlock()
 	if ps == nil {
+		return // no session for this address — can't decrypt, drop silently
+	}
+
+	pt, err := ps.sess.Open(frame) // authenticates AND decrypts
+	if err != nil {
+		log.Printf("sealed frame from %s rejected: %v", src, err)
 		return
 	}
 
-	pt, err := ps.sess.Open(frame)
-	if err != nil {
-		log.Printf("sealed frame from %s rejected: %v", src, err)
+	// Stream data is binary, prefixed 0x02; JSON control payloads start
+	// with '{'. One sealed channel carries both unambiguously.
+	if sid, sf, ok := decodeStreamPayload(pt); ok {
+		if ts := a.tunnels.get(sid); ts != nil {
+			ts.stream.OnFrame(sf)
+		}
 		return
 	}
 
@@ -258,31 +304,60 @@ func (a *agent) handleSealed(src *net.UDPAddr, frame []byte) {
 		return
 	}
 
+	// Lets tunnel handlers reply on this same session.
+	seal := func(b []byte) []byte { return ps.sess.Seal(b) }
+
 	switch p.Kind {
 	case "PING":
+		// Reply inside the SAME encrypted session. No signature needed:
+		// the AEAD tag already proves the sender holds the session key,
+		// which only the owner of the name could have derived.
 		out, _ := json.Marshal(sealedPayload{
 			Kind: "PONG", Name: a.id.Name, Nonce: p.Nonce, TS: time.Now().UnixMilli(),
 		})
 		a.conn.WriteToUDP(ps.sess.Seal(out), src)
 
 	case "PONG":
+		// Route to whoever is waiting on this nonce.
 		a.deliver(&proto.Message{Kind: proto.KindPong, Name: p.Name, Nonce: p.Nonce})
+
+	case "OPEN":
+		go a.handleTunnelOpen(p.Name, p, seal, src)
+
+	case "OPENOK":
+		log.Printf("tunnel %d: peer %s accepted", p.SID, p.Name)
+
+	case "OPENERR":
+		log.Printf("tunnel %d: peer %s refused: %s", p.SID, p.Name, p.Info)
+		if ts := a.tunnels.get(p.SID); ts != nil {
+			ts.close()
+			a.tunnels.remove(p.SID)
+		}
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Encrypted ping — the v0.2 headline
+// ---------------------------------------------------------------------------
+
 // pingEncrypted resolves a name, establishes (or reuses) an encrypted session,
-// and sends a ping INSIDE that session.
+// and sends a ping INSIDE that session. Compared to v0.1's signed-but-plaintext
+// ping, the payload is now confidential and the RTT excludes handshake cost on
+// warm sessions.
 func (a *agent) pingEncrypted(target string, timeout time.Duration) pingResult {
 	res := pingResult{Target: target, Encrypted: true}
 
+	// ---- Step 1: RESOLVE — get the peer's identity key + live endpoint ----
 	peerKey, peerAddr, err := a.resolve(target, timeout)
 	if err != nil {
 		res.Error = err.Error()
 		return res
 	}
 
+	// ---- Step 2: INTRO — cue the peer to punch back (NAT traversal, v0.1) ----
 	a.intro(target)
 
+	// ---- Step 3: encrypted session (handshake if needed, else reuse) ----
 	hsStart := time.Now()
 	sess, err := a.getSession(target, peerKey, peerAddr, timeout)
 	if err != nil {
@@ -291,12 +366,15 @@ func (a *agent) pingEncrypted(target string, timeout time.Duration) pingResult {
 	}
 	res.HandshakeMs = float64(time.Since(hsStart).Microseconds()) / 1000.0
 
+	// CRITICAL CHECK: the session's peer identity key must equal the key the
+	// REGISTRY bound to this name. This is where name-trust meets session-trust.
 	if sess.PeerIDKey != peerKey {
 		res.Error = "session key does not match the registry's binding for this name"
 		return res
 	}
 	res.Verified = true
 
+	// ---- Step 4: ping inside the sealed channel ----
 	nonce := secure.NewNonce()
 	ch := a.wait(nonce)
 	defer a.unwait(nonce)
@@ -314,7 +392,7 @@ func (a *agent) pingEncrypted(target string, timeout time.Duration) pingResult {
 	tick := time.NewTicker(400 * time.Millisecond)
 	defer tick.Stop()
 
-	a.conn.WriteToUDP(sess.Seal(payload), addr)
+	a.conn.WriteToUDP(sess.Seal(payload), addr) // ENCRYPTED on the wire
 
 	for {
 		select {
@@ -330,6 +408,7 @@ func (a *agent) pingEncrypted(target string, timeout time.Duration) pingResult {
 	}
 }
 
+// resolve asks the registry for a name's identity key and live endpoint.
 func (a *agent) resolve(target string, timeout time.Duration) (string, *net.UDPAddr, error) {
 	rkey := proto.KindResolveResp + "|" + target
 	ch := a.wait(rkey)
@@ -361,6 +440,7 @@ func (a *agent) resolve(target string, timeout time.Duration) (string, *net.UDPA
 	}
 }
 
+// intro asks the registry to cue the target to punch back at us.
 func (a *agent) intro(target string) {
 	a.mu.Lock()
 	reg := a.regAddr
@@ -374,7 +454,7 @@ func (a *agent) intro(target string) {
 }
 
 // rekeyLoop drops expired sessions so the next ping re-handshakes.
-// This delivers forward secrecy: ephemeral keys live 5 minutes, max.
+// This is what delivers forward secrecy: ephemeral keys live 5 minutes, max.
 func (a *agent) rekeyLoop() {
 	for range time.Tick(30 * time.Second) {
 		a.mu.Lock()
@@ -386,4 +466,11 @@ func (a *agent) rekeyLoop() {
 		}
 		a.mu.Unlock()
 	}
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

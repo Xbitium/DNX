@@ -14,6 +14,7 @@ func printHuman(dst dnxaddr.Addr, trace1 []hop, ok1 bool, traceBad []hop, okBad 
 	fmt.Println("  DNX ROUTER v2 — forwarding by 256-bit STRUCTURED NAME ADDRESS")
 	fmt.Println(line)
 
+	// The address, derived from the name via the hybrid rule.
 	fmt.Println()
 	fmt.Println("NAME -> 256-BIT ADDRESS (hybrid: TLD/domain assigned, sub/host hashed):")
 	fmt.Println("  host1.dnx.dnxroute.com")
@@ -22,9 +23,11 @@ func printHuman(dst dnxaddr.Addr, trace1 []hop, ok1 bool, traceBad []hop, okBad 
 	fmt.Println("    └ TLD & domain: registry-assigned (aggregatable)")
 	fmt.Println("    └ subdomain & host: hash(label) truncated to 64 bits (self-service)")
 
+	// Sealed frame.
 	fmt.Println()
 	fmt.Printf("SEALED FRAME carried blindly: magic=0x%02X, %d bytes ciphertext.\n", sealed[0], len(sealed))
 
+	// DEMO 1.
 	fmt.Println()
 	fmt.Println(line)
 	fmt.Println("  DEMO 1 — multi-hop forwarding by 64-bit field match")
@@ -44,6 +47,7 @@ func printHuman(dst dnxaddr.Addr, trace1 []hop, ok1 bool, traceBad []hop, okBad 
 		fmt.Println("  integer compare, the same operation IP hardware already does at line rate.")
 	}
 
+	// DEMO 2 — aggregation.
 	fmt.Println()
 	fmt.Println(line)
 	fmt.Println("  DEMO 2 — aggregation: the core's entire table")
@@ -56,6 +60,7 @@ func printHuman(dst dnxaddr.Addr, trace1 []hop, ok1 bool, traceBad []hop, okBad 
 	fmt.Println("  Every host under .com — millions — shares the SAME top-64-bit route.")
 	fmt.Println("  The core never sees domain, subdomain, or host bits. O(TLDs), not O(hosts).")
 
+	// DEMO 3 — drop.
 	fmt.Println()
 	fmt.Println(line)
 	fmt.Println("  DEMO 3 — unallocated TLD field -> definitive drop at core")

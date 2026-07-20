@@ -9,6 +9,7 @@ import (
 	"time"
 )
 
+// helper: a fake DNX node identity (what the registry would have bound to a name)
 type fakeNode struct {
 	name string
 	pub  ed25519.PublicKey
@@ -37,9 +38,11 @@ func TestFullHandshake(t *testing.T) {
 	nonceA := NewNonce()
 	ts := time.Now().UnixMilli()
 
+	// ---- A -> B : HS_INIT, signed by Alice's long-term identity key ----
 	initMsg := HandshakeBytes("HS_INIT", alice.name, bob.name, alice.eph.Pub, nonceA, "", ts)
 	initSig := SignHandshake(alice.priv, initMsg)
 
+	// Bob verifies against the key the REGISTRY bound to alice's name.
 	if err := VerifyHandshake(alice.pubB64(), initMsg, initSig); err != nil {
 		t.Fatalf("bob could not verify alice's HS_INIT: %v", err)
 	}
@@ -47,6 +50,7 @@ func TestFullHandshake(t *testing.T) {
 		t.Fatal("timestamp should be fresh")
 	}
 
+	// ---- B -> A : HS_RESP, echoing nonceA (binds response to this handshake) ----
 	nonceB := NewNonce()
 	ts2 := time.Now().UnixMilli()
 	respMsg := HandshakeBytes("HS_RESP", bob.name, alice.name, bob.eph.Pub, nonceA, nonceB, ts2)
@@ -56,6 +60,7 @@ func TestFullHandshake(t *testing.T) {
 		t.Fatalf("alice could not verify bob's HS_RESP: %v", err)
 	}
 
+	// ---- both sides derive sessions ----
 	aliceSess, err := Derive(alice.eph, bob.eph.Pub, bob.name, bob.pubB64(), nonceA, nonceB, true)
 	if err != nil {
 		t.Fatal(err)
@@ -65,6 +70,7 @@ func TestFullHandshake(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// ---- direction 1: alice -> bob ----
 	msg1 := []byte("ssh will ride this someday")
 	frame := aliceSess.Seal(msg1)
 	if bytes.Contains(frame, msg1) {
@@ -78,6 +84,7 @@ func TestFullHandshake(t *testing.T) {
 		t.Fatalf("plaintext mismatch: %q", got)
 	}
 
+	// ---- direction 2: bob -> alice (different key, must also work) ----
 	msg2 := []byte("reply from the other direction")
 	got2, err := aliceSess.Open(bobSess.Seal(msg2))
 	if err != nil {
@@ -92,13 +99,14 @@ func TestFullHandshake(t *testing.T) {
 // name's owner. This is the property the whole trust chain rests on.
 func TestImpersonationFails(t *testing.T) {
 	alice := newFakeNode(t, "computer1.internal.dnxroute.com")
-	mallory := newFakeNode(t, "computer1.internal.dnxroute.com")
+	mallory := newFakeNode(t, "computer1.internal.dnxroute.com") // same NAME, wrong KEY
 
 	nonceA := NewNonce()
 	ts := time.Now().UnixMilli()
 	msg := HandshakeBytes("HS_INIT", alice.name, "bob", mallory.eph.Pub, nonceA, "", ts)
-	sig := SignHandshake(mallory.priv, msg)
+	sig := SignHandshake(mallory.priv, msg) // signed with the WRONG identity key
 
+	// Verifying against the key the registry bound to that name must FAIL.
 	if err := VerifyHandshake(alice.pubB64(), msg, sig); err == nil {
 		t.Fatal("CRITICAL: impersonation succeeded — wrong key passed verification")
 	}
@@ -111,7 +119,7 @@ func TestTamperDetected(t *testing.T) {
 
 	for _, pos := range []int{0, 3, 9, len(frame) - 1} {
 		bad := append([]byte(nil), frame...)
-		bad[pos] ^= 0x01
+		bad[pos] ^= 0x01 // flip one bit
 		if _, err := b.Open(bad); err == nil {
 			t.Fatalf("CRITICAL: tampered frame accepted (bit flipped at %d)", pos)
 		}
@@ -131,7 +139,8 @@ func TestReplayRejected(t *testing.T) {
 	}
 }
 
-// TestNonceUniqueness: counters must be strictly monotonic (no nonce reuse).
+// TestNonceUniqueness: counters must be strictly monotonic (no nonce reuse,
+// the classic AEAD catastrophe).
 func TestNonceUniqueness(t *testing.T) {
 	a, b := pairedSessions(t)
 	seen := map[string]bool{}
@@ -152,7 +161,7 @@ func TestNonceUniqueness(t *testing.T) {
 // cannot read this session's traffic.
 func TestWrongSessionCannotDecrypt(t *testing.T) {
 	a, _ := pairedSessions(t)
-	_, other := pairedSessions(t)
+	_, other := pairedSessions(t) // unrelated session
 	if _, err := other.Open(a.Seal([]byte("secret"))); err == nil {
 		t.Fatal("CRITICAL: foreign session decrypted our traffic")
 	}
@@ -170,6 +179,7 @@ func TestSessionExpiry(t *testing.T) {
 	}
 }
 
+// pairedSessions builds two sessions that completed a handshake with each other.
 func pairedSessions(t *testing.T) (*Session, *Session) {
 	t.Helper()
 	alice := newFakeNode(t, "a.internal.dnxroute.com")
