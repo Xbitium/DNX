@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>The registry — what it does and how it federates · DNXRoute</title>
+  <meta name="description" content="What a DNX registry is, how it differs from ARP and DNS, how registries delegate and federate across a namespace, and how it would deploy in the real world — including closed namespaces." />
+  <meta name="theme-color" content="#0f5f68" />
+  <link rel="canonical" href="https://dnxroute.com/registry" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="wrap topbar-inner">
+      <div>
+        <div class="kicker"><a href="/">DNXRoute</a></div>
+        <div class="muted">The registry</div>
+      </div>
+      <nav class="nav">
+        <a href="/learn">Learn</a>
+        <a href="/protocol">Protocol</a>
+        <a href="/compare">Compare</a>
+        <a href="/journal">Journal</a>
+        <a href="https://routing.dnxroute.com">Demo</a>
+        <a href="https://github.com/Xbitium/DNX">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <div class="wrap doc">
+    <aside class="toc">
+      <div class="toc-title">Contents</div>
+      <a href="#jobs">1 · Three jobs</a>
+      <a href="#notarp">2 · Not an ARP table</a>
+      <a href="#zones">3 · Zones and delegation</a>
+      <a href="#talking">4 · Do they talk?</a>
+      <a href="#caching">5 · The caching split</a>
+      <a href="#deploy">6 · Deployment patterns</a>
+      <a href="#closed">7 · Closed namespaces</a>
+      <a href="#availability">8 · Availability</a>
+      <a href="#gaps">9 · What isn't built</a>
+    </aside>
+
+    <main>
+      <p class="eyebrow">Design note</p>
+      <h1 style="font-family:Archivo,sans-serif;font-size:clamp(2rem,5vw,3.2rem);line-height:1.08;letter-spacing:-.02em;margin:.2rem 0 1rem">The registry, and how it federates</h1>
+      <div class="prose">
+        <p>The registry is the part of DNX people ask about first, usually in the form: <em>"doesn't that mean one server controls all naming?"</em> Today, yes — and that is the largest unsolved problem in the project. This note explains what the registry actually does, how it is meant to deploy, and what remains unbuilt.</p>
+      </div>
+
+      <section id="jobs" class="section" style="border-top:none;padding-left:0;padding-right:0">
+        <h2>1 · It is really three jobs</h2>
+        <div class="prose">
+          <p>Calling it "the registry" hides the fact that one service currently performs three functions with completely different trust, scale and freshness profiles. Separating them is most of the deployment story.</p>
+        </div>
+        <table class="spec">
+          <thead><tr><th>Job</th><th>Answers</th><th>Changes</th><th>Resembles</th></tr></thead>
+          <tbody>
+            <tr><td>Naming authority</td><td>Who owns this name?</td><td>Almost never</td><td>A domain registrar</td></tr>
+            <tr><td>Location directory</td><td>Where is it right now?</td><td>Constantly</td><td>An ARP table</td></tr>
+            <tr><td>Rendezvous broker</td><td>Introduce these two peers</td><td>Per connection</td><td>STUN / signalling</td></tr>
+          </tbody>
+        </table>
+        <div class="prose">
+          <p>The first is an <em>authority</em> question and must be answered consistently by whoever owns the namespace. The second is <em>soft state</em> that expires on its own. The third is a momentary service that holds nothing. In a mature deployment these are three services, possibly run by three different parties.</p>
+        </div>
+      </section>
+
+      <section id="notarp" class="section" style="padding-left:0;padding-right:0">
+        <h2>2 · Why it is not an ARP table</h2>
+        <div class="prose">
+          <p>The comparison is a good instinct, and it is right about mechanism: like ARP, the location directory is soft state about liveness. An entry says "this identifier is reachable over there", it is refreshed by activity, and it expires when the host goes quiet.</p>
+          <p>The difference is the one that matters. <strong>ARP has no concept of ownership.</strong> Whoever answers "that's me" is believed — which is exactly why ARP spoofing works and why every serious network deploys mitigations for it. A DNX name is bound to a key, so answering is not enough: you have to sign.</p>
+        </div>
+        <table class="spec">
+          <thead><tr><th></th><th>ARP</th><th>DNS</th><th>DNX registry</th></tr></thead>
+          <tbody>
+            <tr><td>Scope</td><td>One link</td><td>Global, delegated</td><td>Global, delegated <em>(design)</em></td></tr>
+            <tr><td>Discovery</td><td>Broadcast</td><td>Query and referral</td><td>Query and referral</td></tr>
+            <tr><td>Freshness</td><td>Minutes</td><td>TTL, often hours</td><td>15-second heartbeat</td></tr>
+            <tr><td>Authority</td><td>None — spoofable</td><td>Delegated zones</td><td>Key-bound, enforced</td></tr>
+            <tr><td>Also brokers NAT</td><td>No</td><td>No</td><td>Yes</td></tr>
+          </tbody>
+        </table>
+        <div class="callout">
+          <div class="t">Not in the forwarding path</div>
+          <p>Routers never query the registry to move a packet. Forwarding runs off each router's own table by walking the name hierarchy. The registry is control plane — nothing consults it per packet, any more than a router consults BGP per packet.</p>
+        </div>
+      </section>
+
+      <section id="zones" class="section" style="padding-left:0;padding-right:0">
+        <h2>3 · One authority per zone</h2>
+        <div class="prose">
+          <p>The unit of registry authority is the <strong>zone</strong>, not the domain and not the machine. Whoever operates a name in the hierarchy runs the registry for everything beneath it, and delegates the branches below to whoever operates those.</p>
+          <p>This is where the design turns out to be self-consistent in a way that is genuinely useful: <strong>the same tree serves three purposes at once.</strong> A level in the name is a routing tier, a delegation boundary, and a unit of authority. That is not a coincidence engineered in — it falls out of using the namespace as the topology.</p>
+        </div>
+        <pre class="code"><code>com.                       <span class="c">← delegates, stores nothing else</span>
+└── dnxroute.com.          <span class="c">← authoritative for *.dnxroute.com</span>
+    └── dnx.dnxroute.com.  <span class="c">← may delegate further, or serve leaves directly</span>
+        └── host1          <span class="c">← a node with a key</span></code></pre>
+        <div class="prose">
+          <p>So the short answer to "does everyone need a registry" is no. Every <em>namespace operator</em> needs one. A company runs a registry for its own names, entirely inside its own network if it prefers, and nobody outside needs to know it exists unless names beneath it are meant to be publicly resolvable.</p>
+        </div>
+      </section>
+
+      <section id="talking" class="section" style="padding-left:0;padding-right:0">
+        <h2>4 · Do registries talk to each other?</h2>
+        <div class="prose">
+          <p>Two models exist, and DNS already ran the experiment.</p>
+          <p><strong>Referral.</strong> Each registry answers only for its own zone and refers the asker downward. The resolver walks the tree. Registries hold no data about anyone else's namespace, so there is no consistency problem between them and no trust required across administrative boundaries.</p>
+          <p><strong>Replication.</strong> Registries share bindings so lookups resolve locally. Faster, but now every pair of registries has a consistency problem, and each must trust data authored by the other. Between mutually distrusting organisations, that is a hard problem wearing a friendly hat.</p>
+          <p>DNS chose referral plus caching, and DNX should almost certainly do the same. The added wrinkle is that DNX records carry keys, which means a referral chain can be <em>signed</em> end to end — a parent can vouch for the delegation to its child, so a resolver can verify the whole path rather than trusting each hop.</p>
+        </div>
+      </section>
+
+      <section id="caching" class="section" style="padding-left:0;padding-right:0">
+        <h2>5 · The caching split</h2>
+        <div class="prose">
+          <p>There is a real tension here worth stating plainly, because it threatens something DNX claims as an advantage.</p>
+          <p>Records are fresh within seconds <em>only because</em> every resolution reaches the authoritative registry. Introduce caching for scale and staleness returns — the exact failure mode DNX criticises DNS for.</p>
+          <p>The resolution is that the two halves of a record have opposite profiles:</p>
+          <ul>
+            <li><strong>Name → key.</strong> Stable, changes effectively never, and is self-verifying because everything signed with it can be checked. Cache it for days.</li>
+            <li><strong>Name → endpoint.</strong> Volatile, changes whenever a host moves or its NAT mapping rotates. Cache briefly or not at all.</li>
+          </ul>
+          <p>Splitting the record splits the problem. It also reinforces the argument from section 1: the naming authority and the location directory want to be different services, because one is a slow-moving ledger and the other is a fast-expiring cache.</p>
+        </div>
+      </section>
+
+      <section id="deploy" class="section" style="padding-left:0;padding-right:0">
+        <h2>6 · Deployment patterns</h2>
+        <h3>Private enterprise</h3>
+        <div class="prose">
+          <p>One registry, inside the perimeter, authoritative for the organisation's namespace. Nothing is published outward. This is the easiest deployment and needs no federation at all — the organisation is the whole world as far as its registry is concerned.</p>
+        </div>
+        <h3>Public internet</h3>
+        <div class="prose">
+          <p>Requires the full delegation chain, referral resolution, and an answer to the question of who operates the levels above you. This is the hardest case and the least built.</p>
+        </div>
+        <h3>Isolated or air-gapped networks</h3>
+        <div class="prose">
+          <p>Each enclave runs a complete, independent registry. Because the networks do not interconnect, there is no cross-registry reconciliation to solve — federation, the project's largest missing piece, is simply not required. Isolated networks are therefore an unusually good early fit, not a compromise.</p>
+        </div>
+      </section>
+
+      <section id="closed" class="section" style="padding-left:0;padding-right:0">
+        <h2>7 · Closed namespaces</h2>
+        <div class="prose">
+          <p>Some top-level domains are <em>sponsored</em> and closed: a single organisation controls them, and names are assigned administratively rather than sold by competing registrars. Such a namespace is the strongest fit DNX has, for reasons that are structural rather than political.</p>
+          <ul>
+            <li><strong>The authority already exists.</strong> DNX's hardest governance question — who decides who owns a name — is answered by an existing org chart.</li>
+            <li><strong>Squatting disappears.</strong> First-come-first-served is a real weakness on the open internet. In a namespace where every registrant is a known member, it is not a threat model.</li>
+            <li><strong>Ownership proof is already solved.</strong> No need to invent a mechanism for proving you control a name; the sponsor already knows.</li>
+            <li><strong>The hierarchy is already organisational.</strong> Closed namespaces tend to mirror real reporting structure, which is exactly the location-shaped tree the routing layer wants.</li>
+          </ul>
+        </div>
+        <div class="callout">
+          <div class="t">The irony worth naming</div>
+          <p>The property that makes a centralised registry a liability on the open internet — one party controls all naming — is precisely what a closed organisational network wants. A single accountable authority is a feature there, not a flaw.</p>
+        </div>
+        <div class="prose">
+          <p>A sponsor need not be the only registry within its namespace. It can delegate whole branches to constituent organisations, exactly as closed TLDs already delegate today.</p>
+        </div>
+      </section>
+
+      <section id="availability" class="section" style="padding-left:0;padding-right:0">
+        <h2>8 · Availability</h2>
+        <div class="prose">
+          <p>One authoritative registry per zone does <strong>not</strong> mean one server. The registry is a role, and any serious deployment replicates it — otherwise a single machine failure removes an entire branch of the namespace from the network.</p>
+          <p>The naming authority replicates easily: its data is slow-moving and every record is signed, so replicas need not be trusted, only checked. The location directory is harder, because heartbeats arrive continuously and endpoints change — replicas must either share live state or each maintain their own view.</p>
+          <p>What happens when a registry is unreachable is worth being precise about. <strong>Existing sessions keep working</strong> — once two peers have exchanged keys and punched a path, the registry is out of the loop entirely. What breaks is <em>new</em> resolution and <em>new</em> rendezvous. That is a meaningfully softer failure than a DNS outage, but it is still an outage.</p>
+        </div>
+      </section>
+
+      <section id="gaps" class="section" style="padding-left:0;padding-right:0">
+        <h2>9 · What isn't built</h2>
+        <div class="prose">
+          <p>Everything above from section 3 onward is design, not implementation. What exists today is a single registry process, on a single machine, authoritative for everything, run by one person. Specifically missing:</p>
+          <ul>
+            <li><strong>Delegation and referral.</strong> There is no parent-child relationship between registries because there is only one registry.</li>
+            <li><strong>Signed responses.</strong> Registry replies are unsigned, so an on-path attacker can forge resolution answers. This does not permit impersonation — a forged endpoint still cannot produce replies that verify against the genuine key — but it permits denial of service.</li>
+            <li><strong>Replication.</strong> No failover, no anycast, no replicas.</li>
+            <li><strong>Metadata privacy.</strong> The single registry observes every resolution, and therefore knows who talks to whom. Delegation improves this by scoping each registry's view to its own zone, but does not eliminate it.</li>
+            <li><strong>Ownership binding.</strong> Nothing ties a DNX name to actual control of the corresponding domain, so any name may currently be claimed by anyone.</li>
+          </ul>
+          <p>These are listed in the <a href="/protocol#security">protocol's security section</a> as well. A design note that described only the intended architecture, without saying how much of it is imaginary, would be marketing.</p>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <footer class="wrap footer">
+    <span>DNXRoute · Design note</span>
+    <span>Federation is the largest unbuilt piece of DNX · <a href="https://github.com/Xbitium/DNX">GitHub</a></span>
+  </footer>
+</body>
+</html>
