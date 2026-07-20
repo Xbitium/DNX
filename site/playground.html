@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Playground — DNXRoute</title>
+  <meta name="description" content="Type a name and watch it become a DNX address, then follow it hop by hop through the routing hierarchy. Every value is computed in your browser by the same rule the protocol uses." />
+  <meta name="theme-color" content="#0f5f68" />
+  <link rel="canonical" href="https://dnxroute.com/playground" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css" />
+  <style>
+    .pg-input{width:100%;max-width:520px;font-family:'IBM Plex Mono',monospace;font-size:1.05rem;padding:13px 15px;border:2px solid var(--border);background:var(--panel);color:var(--ink);border-radius:6px}
+    .pg-input:focus{outline:none;border-color:var(--accent)}
+    .pg-input.bad{border-color:#b4531f}
+    .presets{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+    .preset{font-family:'IBM Plex Mono',monospace;font-size:.82rem;padding:6px 11px;border:1px solid var(--border);background:transparent;color:var(--muted);cursor:pointer;border-radius:4px}
+    .preset:hover{border-color:var(--accent);color:var(--accent)}
+    .fields{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:26px}
+    @media(max-width:820px){.fields{grid-template-columns:repeat(2,1fr)}}
+    .field{border:1px solid var(--border);background:var(--panel);padding:14px}
+    .field.assigned{border-top:3px solid var(--accent)}
+    .field.hashed{border-top:3px solid #8390c9}
+    .field.empty{opacity:.5}
+    .field .fname{font-family:'IBM Plex Mono',monospace;font-size:.68rem;text-transform:uppercase;letter-spacing:.11em;color:var(--muted)}
+    .field .flabel{font-family:'IBM Plex Mono',monospace;font-size:1rem;color:var(--ink);margin:6px 0 4px;word-break:break-all}
+    .field .fval{font-family:'IBM Plex Mono',monospace;font-size:.8rem;color:var(--accent);word-break:break-all}
+    .field .forigin{font-size:.72rem;color:var(--muted);margin-top:7px}
+    .addr-full{font-family:'IBM Plex Mono',monospace;font-size:.9rem;color:var(--ink);background:#0d1a17;color:#cdeadb;padding:14px;margin-top:18px;overflow-x:auto;border:1px solid #1c2f29}
+    .hop{display:flex;gap:14px;align-items:flex-start;padding:13px 0;border-bottom:1px solid var(--border)}
+    .hop .n{font-family:'IBM Plex Mono',monospace;font-size:.78rem;color:var(--accent);min-width:26px;padding-top:2px}
+    .hop .body{flex:1}
+    .hop .rt{font-family:'IBM Plex Mono',monospace;font-size:.95rem;color:var(--ink)}
+    .hop .why{font-size:.87rem;color:var(--muted);margin-top:3px}
+    .hop.drop .rt{color:#b4531f}
+    .hop.deliver .rt{color:var(--accent);font-weight:600}
+    .err{color:#b4531f;font-family:'IBM Plex Mono',monospace;font-size:.9rem;margin-top:14px}
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="wrap topbar-inner">
+      <div>
+        <div class="kicker"><a href="/">DNXRoute</a></div>
+        <div class="muted">Playground</div>
+      </div>
+      <nav class="nav">
+        <a href="/learn">Learn</a>
+        <a href="/protocol">Protocol</a>
+        <a href="/compare">Compare</a>
+        <a href="/journal">Journal</a>
+        <a href="/playground">Playground</a>
+        <a href="https://github.com/Xbitium/DNX">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section class="hero" style="padding-bottom:28px">
+      <p class="eyebrow">Playground</p>
+      <h1>Watch a name become an address.</h1>
+      <p class="lead">Type any name below. Everything on this page is computed in your browser by the same rule the protocol uses — the hashed fields are real SHA-256, truncated exactly as the implementation does it. Nothing here is a mock-up.</p>
+    </section>
+
+    <section class="section" style="padding-left:0;padding-right:0">
+      <h2>1 · Address explorer</h2>
+      <div class="prose"><p>A DNX address is four 64-bit fields. The top two are <strong>assigned</strong> by a registry, which is what makes routes aggregate. The bottom two are <strong>derived</strong> from the label, so anyone can name their own hosts without asking permission.</p></div>
+
+      <input id="nameIn" class="pg-input mono" value="host1.dnx.dnxroute.com" spellcheck="false" autocomplete="off" aria-label="DNX name" />
+      <div class="presets">
+        <button class="preset" data-n="host1.dnx.dnxroute.com">host1.dnx.dnxroute.com</button>
+        <button class="preset" data-n="host2.dnx.dnxroute.com">host2.dnx.dnxroute.com</button>
+        <button class="preset" data-n="host1.dnxroute.com">no subdomain</button>
+        <button class="preset" data-n="server.ops.disa.mil">server.ops.disa.mil</button>
+        <button class="preset" data-n="host1.dnx.example.com">unallocated domain</button>
+        <button class="preset" data-n="host.site.nosuchtld">unallocated TLD</button>
+      </div>
+
+      <div id="err" class="err" hidden></div>
+      <div id="fields" class="fields"></div>
+      <div id="addrFull" class="addr-full"></div>
+      <p class="muted" style="font-size:.85rem;margin-top:10px">Change a single character of the host label and watch the bottom field change completely — that is the avalanche property of the hash. Change the domain and only the assigned field moves.</p>
+    </section>
+
+    <section class="section" style="padding-left:0;padding-right:0">
+      <h2>2 · Follow it through the network</h2>
+      <div class="prose"><p>This walks the address through the same four-router topology that is running live on two datacenters right now. Each hop reads exactly one field and nothing else.</p></div>
+      <div id="walk"></div>
+      <div class="callout" style="margin-top:24px">
+        <div class="t">See the real thing</div>
+        <p>This is a faithful simulation running in your browser. To watch actual packets cross two physical machines with telemetry streamed back from both, use the <a href="https://routing.dnxroute.com">live routing demo</a>.</p>
+      </div>
+    </section>
+
+    <section class="section" style="padding-left:0;padding-right:0">
+      <h2>3 · On the wire</h2>
+      <div class="prose"><p>How that address is framed for transmission. The payload is already sealed before the routing header is attached, which is why routers can forward what they cannot read.</p></div>
+      <pre class="code"><code id="wire"></code></pre>
+    </section>
+  </main>
+
+  <footer class="wrap footer">
+    <span>DNXRoute · Playground</span>
+    <span>Computed locally — nothing is sent anywhere · <a href="https://github.com/Xbitium/DNX">GitHub</a></span>
+  </footer>
+
+<script>
+// ---------------------------------------------------------------------------
+// A faithful port of the address derivation. The hashed fields must match the
+// Go implementation byte for byte:
+//     binary.BigEndian.Uint64(sha256(strings.ToLower(label))[:8])
+// ---------------------------------------------------------------------------
+const TLD = {
+  com: 0x0000000100000000n, gov: 0x0000000200000000n, mil: 0x0000000300000000n,
+  org: 0x0000000400000000n, edu: 0x0000000500000000n,
+};
+const DOMAIN = { dnxroute: 0x1001n, disa: 0x2001n, dod: 0x2002n };
+
+async function hash64(label) {
+  const buf = new TextEncoder().encode(label.toLowerCase());
+  const d = new DataView(await crypto.subtle.digest('SHA-256', buf));
+  return (BigInt(d.getUint32(0)) << 32n) | BigInt(d.getUint32(4));
+}
+const hex = v => v.toString(16).padStart(16, '0');
+
+async function fromName(fqdn) {
+  const labels = fqdn.trim().split('.').map(s => s.trim()).filter(Boolean);
+  if (labels.length < 2) throw new Error('a name needs at least domain.tld');
+  const n = labels.length;
+  const tldLabel = labels[n - 1], domLabel = labels[n - 2];
+
+  if (!(tldLabel in TLD)) throw new Error(`TLD "${tldLabel}" is not allocated by the registry`);
+  if (!(domLabel in DOMAIN)) throw new Error(`domain "${domLabel}" is not allocated under .${tldLabel}`);
+
+  // n >= 4, not n >= 3: at three labels, labels[n-3] is the HOST label, and
+  // using it here would copy the host into the subdomain field.
+  const sub = n >= 4 ? await hash64(labels[n - 3]) : 0n;
+  const host = await hash64(labels[0]);
+
+  return {
+    fields: [
+      { name: 'TLD',       label: tldLabel,               value: TLD[tldLabel], kind: 'assigned' },
+      { name: 'domain',    label: domLabel,               value: DOMAIN[domLabel], kind: 'assigned' },
+      { name: 'subdomain', label: n >= 4 ? labels[n-3] : '(none)', value: sub, kind: 'hashed' },
+      { name: 'host',      label: labels[0],              value: host, kind: 'hashed' },
+    ]
+  };
+}
+
+// The live topology, mirroring the deployed node configs.
+const TOPOLOGY = [
+  { router: 'core',        node: 'dnxroute1', field: 0, routes: { '0000000100000000': 'dnxroute-gw', '0000000200000000': 'gov-core' } },
+  { router: 'dnxroute-gw', node: 'dnxroute1', field: 1, routes: { '0000000000001001': 'dnx-rtr' } },
+  { router: 'dnx-rtr',     node: 'dnxroute2', field: 2, routes: { '27753dd64fccf1c0': 'leaf-sw' } },
+  { router: 'leaf-sw',     node: 'dnxroute2', field: 3, routes: { 'c0365b5a3867cc38': 'host1', 'a0fa7aed11f846f7': 'host2' } },
+];
+
+function renderFields(res) {
+  document.getElementById('fields').innerHTML = res.fields.map(f => `
+    <div class="field ${f.kind}${f.value === 0n ? ' empty' : ''}">
+      <div class="fname">${f.name}</div>
+      <div class="flabel">${f.label}</div>
+      <div class="fval">0x${hex(f.value)}</div>
+      <div class="forigin">${f.kind === 'assigned' ? 'assigned by registry' : (f.value === 0n ? 'not present' : 'SHA-256, truncated')}</div>
+    </div>`).join('');
+  document.getElementById('addrFull').textContent = res.fields.map(f => hex(f.value)).join(':');
+}
+
+function renderWalk(res) {
+  const out = [];
+  let consumed = 0, done = false;
+  for (const r of TOPOLOGY) {
+    if (done) break;
+    const val = hex(res.fields[r.field].value);
+    const next = r.routes[val];
+    if (!next) {
+      out.push(`<div class="hop drop"><div class="n">${consumed + 1}</div><div class="body">
+        <div class="rt">${r.router} — dropped</div>
+        <div class="why">Reads the <strong>${res.fields[r.field].name}</strong> field, <code>0x${val}</code>, and has no route for it.
+        This router owns that level, so nothing closer to the root knows better. One hop, no loop.</div></div></div>`);
+      done = true; break;
+    }
+    const isLeaf = r.field === 3;
+    out.push(`<div class="hop ${isLeaf ? 'deliver' : ''}"><div class="n">${consumed + 1}</div><div class="body">
+      <div class="rt">${r.router} ${isLeaf ? '— delivered to ' + next : '→ ' + next}</div>
+      <div class="why">On <em>${r.node}</em>. Matched the <strong>${res.fields[r.field].name}</strong> field <code>0x${val}</code>${isLeaf ? '.' : ', and read no lower field.'}</div>
+    </div></div>`);
+    consumed++;
+    if (isLeaf) done = true;
+  }
+  document.getElementById('walk').innerHTML = out.join('');
+}
+
+function renderWire(res) {
+  const bytes = res.fields.map(f => hex(f.value)).join('');
+  const grouped = bytes.match(/.{1,8}/g).join(' ');
+  document.getElementById('wire').innerHTML =
+`0xDF  <span class="c">routed frame marker</span>
+${grouped}
+<span class="c">└─ 32 bytes: the four fields above, most significant first</span>
+0x0000  <span class="c">levels already resolved — 0, this packet is new</span>
+0xD8 ...  <span class="c">the sealed payload: ChaCha20-Poly1305, opaque to every router</span>`;
+}
+
+async function update() {
+  const el = document.getElementById('nameIn'), err = document.getElementById('err');
+  try {
+    const res = await fromName(el.value);
+    el.classList.remove('bad'); err.hidden = true;
+    renderFields(res); renderWalk(res); renderWire(res);
+  } catch (e) {
+    el.classList.add('bad');
+    err.hidden = false;
+    err.textContent = 'cannot resolve: ' + e.message;
+    document.getElementById('fields').innerHTML = '';
+    document.getElementById('addrFull').textContent = '';
+    document.getElementById('walk').innerHTML =
+      '<div class="hop drop"><div class="n">—</div><div class="body"><div class="rt">no address</div>' +
+      '<div class="why">The registry refuses to derive an address for a name whose assigned levels it does not know. ' +
+      'Nothing can be routed, because there is nothing to route toward.</div></div></div>';
+    document.getElementById('wire').textContent = '';
+  }
+}
+
+document.getElementById('nameIn').addEventListener('input', update);
+document.querySelectorAll('.preset').forEach(b =>
+  b.addEventListener('click', () => { document.getElementById('nameIn').value = b.dataset.n; update(); }));
+update();
+</script>
+</body>
+</html>
