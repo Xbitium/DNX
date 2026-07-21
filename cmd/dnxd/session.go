@@ -418,9 +418,10 @@ func (a *agent) resolve(target string, timeout time.Duration) (string, *net.UDPA
 	reg := a.regAddr
 	a.mu.Unlock()
 
+	askedNonce := secure.NewNonce()
 	rq := &proto.Message{
 		Kind: proto.KindResolve, Name: a.id.Name, Target: target,
-		TS: time.Now().UnixMilli(), Nonce: secure.NewNonce(),
+		TS: time.Now().UnixMilli(), Nonce: askedNonce,
 	}
 	rq.Sign(a.id.Priv())
 	a.send(reg, rq)
@@ -430,6 +431,22 @@ func (a *agent) resolve(target string, timeout time.Duration) (string, *net.UDPA
 		if m.Kind == proto.KindError {
 			return "", nil, fmt.Errorf("%s", m.Info)
 		}
+
+		// The key in this answer is the ONLY thing that ties a name to an
+		// identity — nothing downstream can catch a substitution, because the
+		// handshake is checked against exactly this key. If the registry's
+		// signing key is known, an unverifiable answer must be refused
+		// outright rather than used and reported as verified.
+		if a.registryKey != "" {
+			if m.Nonce != askedNonce {
+				return "", nil, fmt.Errorf("registry answer does not match the question asked")
+			}
+			if err := proto.VerifyDetached(a.registryKey,
+				proto.ResolveRespBytes(m.Target, m.PubKey, m.Endpoint, m.TS, m.Nonce), m.Sig); err != nil {
+				return "", nil, fmt.Errorf("registry answer failed verification, refusing to use it: %w", err)
+			}
+		}
+
 		addr, err := net.ResolveUDPAddr("udp", m.Endpoint)
 		if err != nil {
 			return "", nil, fmt.Errorf("registry returned a bad endpoint")

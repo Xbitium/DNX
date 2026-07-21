@@ -69,6 +69,10 @@ type agent struct {
 	// to 127.0.0.1 — an admin API, a database, a metrics endpoint that was
 	// only ever meant to be local.
 	tunnelPorts map[int]bool
+
+	// registryKey is the registry's signing key, distributed out of band.
+	// Empty means resolution answers cannot be checked — see resolve().
+	registryKey string
 }
 
 // parseTunnelPorts turns "22, 5432" into a set. An empty string yields an
@@ -120,6 +124,8 @@ func main() {
 	api := flag.String("api", "127.0.0.1:4401", "localhost control API for the dnx CLI")
 	tunnelPorts := flag.String("tunnel-ports", "",
 		"comma-separated TCP ports peers may tunnel to, e.g. 22,5432 (empty disables inbound tunnels)")
+	registryKey := flag.String("registry-key", "",
+		"the registry's signing key, base64 (empty means resolution answers are NOT verified)")
 	flag.Parse()
 
 	// ---- Identity: load existing or mint on first boot ----
@@ -148,6 +154,13 @@ func main() {
 		sessions:    map[string]*peerSession{}, // v0.2: encrypted channels, keyed by peer NAME
 		tunnels:     newTunnelTable(),
 		tunnelPorts: allowedPorts,
+		registryKey: *registryKey,
+	}
+	if *registryKey == "" {
+		log.Printf("WARNING: no --registry-key. Resolution answers cannot be authenticated, so an")
+		log.Printf("         on-path attacker can substitute a peer's key and be reported as verified.")
+	} else {
+		log.Printf("registry answers verified against key %.12s…", *registryKey)
 	}
 	if len(allowedPorts) == 0 {
 		log.Printf("inbound tunnels disabled (no --tunnel-ports given)")

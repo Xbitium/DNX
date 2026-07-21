@@ -111,6 +111,21 @@ func RebindBytes(name, newPubB64 string, ts int64, nonce string) []byte {
 	return []byte(fmt.Sprintf("dnx-rebind1|%s|%s|%d|%s", name, newPubB64, ts, nonce))
 }
 
+// ResolveRespBytes is the canonical string a registry signs when answering a
+// resolution.
+//
+// It MUST cover the public key and the endpoint. Those are precisely the
+// fields an attacker would forge, and a node has no independent knowledge of
+// the peer's key — it believes whatever the registry says. A signature that
+// omitted them would attest only that "some answer about this name was given"
+// while leaving an attacker free to substitute the key, which would make the
+// signature worse than useless: it would look like assurance.
+//
+// The nonce echoes the request, binding the answer to the question asked.
+func ResolveRespBytes(target, pubB64, endpoint string, ts int64, nonce string) []byte {
+	return []byte(fmt.Sprintf("dnx-resolveresp1|%s|%s|%s|%d|%s", target, pubB64, endpoint, ts, nonce))
+}
+
 // VerifyDetached checks a base64 signature over arbitrary bytes against a
 // base64 ed25519 public key.
 func VerifyDetached(pubB64 string, msg []byte, sigB64 string) error {

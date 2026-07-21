@@ -19,6 +19,9 @@
 package main
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -48,6 +51,60 @@ type registry struct {
 	// statePath is where ownership is persisted. Empty disables persistence
 	// (used by tests).
 	statePath string
+
+	// The registry's own identity. A node has no independent knowledge of a
+	// peer's key — it believes what this service tells it — so an answer that
+	// cannot be authenticated is an answer an on-path attacker can replace,
+	// key and all.
+	signPriv ed25519.PrivateKey
+	signPub  string // base64
+}
+
+type registryKeyFile struct {
+	PubB64  string `json:"pubkey"`
+	PrivB64 string `json:"privkey"`
+}
+
+// loadOrCreateKey loads the registry's signing identity, generating one on
+// first boot. An empty path yields an ephemeral key, which is what tests want.
+func (r *registry) loadOrCreateKey(path string) error {
+	if path == "" {
+		pub, priv, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			return err
+		}
+		r.signPriv, r.signPub = priv, base64.StdEncoding.EncodeToString(pub)
+		return nil
+	}
+	if b, err := os.ReadFile(path); err == nil {
+		var kf registryKeyFile
+		if err := json.Unmarshal(b, &kf); err != nil {
+			return fmt.Errorf("corrupt registry key %s: %w", path, err)
+		}
+		priv, err := base64.StdEncoding.DecodeString(kf.PrivB64)
+		if err != nil || len(priv) != ed25519.PrivateKeySize {
+			return fmt.Errorf("corrupt registry private key in %s", path)
+		}
+		r.signPriv, r.signPub = ed25519.PrivateKey(priv), kf.PubB64
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return err
+	}
+	r.signPriv = priv
+	r.signPub = base64.StdEncoding.EncodeToString(pub)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	b, _ := json.MarshalIndent(registryKeyFile{
+		PubB64:  r.signPub,
+		PrivB64: base64.StdEncoding.EncodeToString(priv),
+	}, "", "  ")
+	return os.WriteFile(path, b, 0o600)
 }
 
 // ---------------------------------------------------------------------------
@@ -272,6 +329,8 @@ func main() {
 		"file holding persisted name ownership (empty disables persistence)")
 	release := flag.String("release", "",
 		"administratively release a name and exit (for a lost key; requires shell access)")
+	keyPath := flag.String("key", "/var/lib/dnx/registry.key",
+		"the registry's own signing identity (empty generates an ephemeral one)")
 	flag.Parse()
 
 	// Releasing a name is a file operation, not a network one — do it before
@@ -304,6 +363,12 @@ func main() {
 	log.Printf("dnx-registry up on %s — the name IS the address.", *listen)
 
 	reg := &registry{names: map[string]*record{}, statePath: *statePath}
+	if err := reg.loadOrCreateKey(*keyPath); err != nil {
+		log.Fatalf("registry signing identity: %v", err)
+	}
+	// Operators must distribute this to nodes out of band; a node that cannot
+	// check the signature is trusting whoever answers.
+	log.Printf("registry signing key: %s", reg.signPub)
 	restored, err := reg.load()
 	if err != nil {
 		log.Fatalf("cannot read ownership state from %s: %v", *statePath, err)
@@ -388,12 +453,18 @@ func (r *registry) handle(conn *net.UDPConn, src *net.UDPAddr, m *proto.Message)
 		fresh := ok && rec.Endpoint != nil && time.Since(rec.LastSeen) < staleAfter
 		var resp *proto.Message
 		if fresh {
+			ep := rec.Endpoint.String()
+			ts := time.Now().UnixMilli()
 			resp = &proto.Message{
 				Kind:     proto.KindResolveResp,
 				Target:   m.Target,
-				PubKey:   rec.PubB64,            // caller verifies pongs against this
-				Endpoint: rec.Endpoint.String(), // plumbing, never shown to humans
+				PubKey:   rec.PubB64, // the caller has no other source for this
+				Endpoint: ep,         // plumbing, never shown to humans
+				TS:       ts,
+				Nonce:    m.Nonce, // echo: binds this answer to that question
 			}
+			resp.Sig = proto.SignDetached(r.signPriv,
+				proto.ResolveRespBytes(m.Target, rec.PubB64, ep, ts, m.Nonce))
 		} else {
 			resp = errMsg("unknown or offline: " + m.Target)
 		}
