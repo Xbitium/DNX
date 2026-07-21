@@ -52,3 +52,13 @@ ol.steps b{color:var(--ink)}
 .entry{border-top:1px solid var(--border);padding:26px 0}
 .entry .meta{font-family:'IBM Plex Mono',monospace;font-size:.8rem;color:var(--accent);letter-spacing:.08em}
 .entry h3{margin:.4rem 0 .6rem;font-size:1.35rem}
+
+/* ---- complete site navigation in the footer ----
+   The top nav is deliberately short. Everything reachable on the site is
+   listed here so that nothing is discoverable only by reading body text. */
+.footer-nav{display:grid;grid-template-columns:repeat(3,1fr);gap:30px;padding:40px 24px 8px;border-top:1px solid var(--border);max-width:var(--max);margin:0 auto}
+.footer-nav h4{font-family:'IBM Plex Mono',monospace;font-size:.7rem;text-transform:uppercase;letter-spacing:.13em;color:var(--accent);margin:0 0 12px;font-weight:600}
+.footer-nav a{display:block;padding:5px 0;color:var(--muted);font-size:.93rem;text-decoration:none}
+.footer-nav a:hover{color:var(--accent);text-decoration:underline}
+.footer-nav .note{font-size:.8rem;color:var(--muted);opacity:.75;margin-top:2px;line-height:1.4}
+@media(max-width:700px){.footer-nav{grid-template-columns:1fr 1fr;gap:22px}}
