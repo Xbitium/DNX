@@ -47,6 +47,11 @@ const (
 	// out of band by the namespace operator.
 	KindRebind    = "REBIND"
 	KindRebindAck = "REBIND_ACK"
+
+	// KindReferral delegates part of the namespace to another registry.
+	// A referral is a transfer of trust, so it is signed by the registry
+	// making it and may only ever narrow the zone it applies to.
+	KindReferral = "REFERRAL"
 )
 
 // Message is the single envelope used for ALL DNX v0.1 traffic.
@@ -66,6 +71,9 @@ type Message struct {
 	// ---- v0.2 handshake fields ----
 	EphPub string `json:"eph,omitempty"`     // base64 X25519 ephemeral public key
 	NonceB string `json:"nonce_b,omitempty"` // responder's nonce (HS_RESP only; Nonce carries the initiator's)
+
+	// ---- federation ----
+	Zone string `json:"zone,omitempty"` // the delegated zone, on a REFERRAL
 }
 
 // SigningBytes returns the canonical byte string that gets signed.
@@ -124,6 +132,19 @@ func RebindBytes(name, newPubB64 string, ts int64, nonce string) []byte {
 // The nonce echoes the request, binding the answer to the question asked.
 func ResolveRespBytes(target, pubB64, endpoint string, ts int64, nonce string) []byte {
 	return []byte(fmt.Sprintf("dnx-resolveresp1|%s|%s|%s|%d|%s", target, pubB64, endpoint, ts, nonce))
+}
+
+// ReferralBytes is the canonical string a registry signs when delegating.
+//
+// It covers the child registry's ADDRESS and its SIGNING KEY, because those
+// are what the resolver will trust next. A referral that named only a zone
+// would let anyone who captured it point the resolver at a registry of their
+// choosing — the same substitution attack as a forged resolution answer, one
+// level further up, and worse: it hands over a whole branch of the namespace
+// rather than a single name.
+func ReferralBytes(target, zoneName, endpoint, childKeyB64 string, ts int64, nonce string) []byte {
+	return []byte(fmt.Sprintf("dnx-referral1|%s|%s|%s|%s|%d|%s",
+		target, zoneName, endpoint, childKeyB64, ts, nonce))
 }
 
 // VerifyDetached checks a base64 signature over arbitrary bytes against a

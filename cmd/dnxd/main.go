@@ -258,7 +258,7 @@ func (a *agent) readLoop() {
 			resp.Sign(a.id.Priv()) // prove we hold computer2's key
 			a.send(src, resp)
 
-		case proto.KindPong, proto.KindResolveResp, proto.KindError:
+		case proto.KindPong, proto.KindResolveResp, proto.KindReferral, proto.KindError:
 			// Responses: route to whichever operation is waiting on them.
 			a.deliver(m)
 		}

@@ -24,6 +24,7 @@ import (
 
 	"dnx/internal/proto"
 	"dnx/internal/secure"
+	"dnx/internal/zone"
 )
 
 // sealedPayload is what travels INSIDE an encrypted frame.
@@ -409,55 +410,116 @@ func (a *agent) pingEncrypted(target string, timeout time.Duration) pingResult {
 }
 
 // resolve asks the registry for a name's identity key and live endpoint.
-func (a *agent) resolve(target string, timeout time.Duration) (string, *net.UDPAddr, error) {
-	rkey := proto.KindResolveResp + "|" + target
-	ch := a.wait(rkey)
-	defer a.unwait(rkey)
+// maxReferrals bounds how far a chain of delegations may be followed. Each
+// referral must narrow the zone, so a legitimate chain is short; a long one
+// means something is wrong and following it further only helps whoever made
+// it wrong.
+const maxReferrals = 8
 
+// resolve asks for a name, following delegations until an authoritative
+// answer arrives.
+//
+// Each referral is a transfer of trust: the registry currently believed says
+// "for this branch, believe that one instead, with this key". Three things
+// must hold for that to be safe, and all three are checked here rather than
+// assumed:
+//
+//   - the referral is signed by the registry we currently trust;
+//   - the delegated zone actually contains the name being asked about,
+//     otherwise the referral is simply misdirection;
+//   - each hop narrows. A delegation that widened would let a registry
+//     handed one small branch seize the namespace above it.
+func (a *agent) resolve(target string, timeout time.Duration) (string, *net.UDPAddr, error) {
 	a.mu.Lock()
-	reg := a.regAddr
+	curAddr := a.regAddr
 	a.mu.Unlock()
 
-	askedNonce := secure.NewNonce()
-	rq := &proto.Message{
-		Kind: proto.KindResolve, Name: a.id.Name, Target: target,
-		TS: time.Now().UnixMilli(), Nonce: askedNonce,
-	}
-	rq.Sign(a.id.Priv())
-	a.send(reg, rq)
+	curKey := a.registryKey
+	curZone := "" // the configured registry is trusted by configuration, not by referral
 
-	select {
-	case m := <-ch:
-		if m.Kind == proto.KindError {
+	deadline := time.Now().Add(timeout)
+
+	for hop := 0; hop < maxReferrals; hop++ {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return "", nil, fmt.Errorf("resolve timeout after %d referral(s)", hop)
+		}
+
+		askedNonce := secure.NewNonce()
+		ch := a.wait(askedNonce)
+
+		rq := &proto.Message{
+			Kind: proto.KindResolve, Name: a.id.Name, Target: target,
+			TS: time.Now().UnixMilli(), Nonce: askedNonce,
+		}
+		rq.Sign(a.id.Priv())
+		a.send(curAddr, rq)
+
+		var m *proto.Message
+		select {
+		case m = <-ch:
+			a.unwait(askedNonce)
+		case <-time.After(remaining):
+			a.unwait(askedNonce)
+			return "", nil, fmt.Errorf("resolve timeout (registry unreachable?)")
+		}
+
+		switch m.Kind {
+		case proto.KindError:
 			return "", nil, fmt.Errorf("%s", m.Info)
-		}
 
-		// The key in this answer is the ONLY thing that ties a name to an
-		// identity — nothing downstream can catch a substitution, because the
-		// handshake is checked against exactly this key. If the registry's
-		// signing key is known, an unverifiable answer must be refused
-		// outright rather than used and reported as verified.
-		if a.registryKey != "" {
+		case proto.KindReferral:
 			if m.Nonce != askedNonce {
-				return "", nil, fmt.Errorf("registry answer does not match the question asked")
+				return "", nil, fmt.Errorf("referral does not match the question asked")
 			}
-			if err := proto.VerifyDetached(a.registryKey,
-				proto.ResolveRespBytes(m.Target, m.PubKey, m.Endpoint, m.TS, m.Nonce), m.Sig); err != nil {
-				return "", nil, fmt.Errorf("registry answer failed verification, refusing to use it: %w", err)
+			if curKey != "" {
+				if err := proto.VerifyDetached(curKey,
+					proto.ReferralBytes(target, m.Zone, m.Endpoint, m.PubKey, m.TS, m.Nonce), m.Sig); err != nil {
+					return "", nil, fmt.Errorf("referral to %q failed verification, refusing to follow it: %w", m.Zone, err)
+				}
 			}
-		}
+			if !zone.Contains(m.Zone, target) {
+				return "", nil, fmt.Errorf("referral delegates %q, which does not contain %q", m.Zone, target)
+			}
+			if curZone != "" && !zone.IsNarrower(m.Zone, curZone) {
+				return "", nil, fmt.Errorf("referral widens authority from %q to %q, refusing", curZone, m.Zone)
+			}
+			if !proto.ValidPubKey(m.PubKey) {
+				return "", nil, fmt.Errorf("referral to %q carries an invalid signing key", m.Zone)
+			}
+			next, err := net.ResolveUDPAddr("udp", m.Endpoint)
+			if err != nil {
+				return "", nil, fmt.Errorf("referral to %q has an unusable endpoint", m.Zone)
+			}
+			curAddr, curKey, curZone = next, m.PubKey, m.Zone
+			continue
 
-		addr, err := net.ResolveUDPAddr("udp", m.Endpoint)
-		if err != nil {
-			return "", nil, fmt.Errorf("registry returned a bad endpoint")
+		case proto.KindResolveResp:
+			// The key here is the ONLY thing tying a name to an identity —
+			// nothing downstream can catch a substitution, because the
+			// handshake is checked against exactly this key.
+			if curKey != "" {
+				if m.Nonce != askedNonce {
+					return "", nil, fmt.Errorf("registry answer does not match the question asked")
+				}
+				if err := proto.VerifyDetached(curKey,
+					proto.ResolveRespBytes(m.Target, m.PubKey, m.Endpoint, m.TS, m.Nonce), m.Sig); err != nil {
+					return "", nil, fmt.Errorf("registry answer failed verification, refusing to use it: %w", err)
+				}
+			}
+			addr, err := net.ResolveUDPAddr("udp", m.Endpoint)
+			if err != nil {
+				return "", nil, fmt.Errorf("registry returned a bad endpoint")
+			}
+			return m.PubKey, addr, nil
+
+		default:
+			return "", nil, fmt.Errorf("unexpected reply %q while resolving", m.Kind)
 		}
-		return m.PubKey, addr, nil
-	case <-time.After(timeout):
-		return "", nil, fmt.Errorf("resolve timeout (registry unreachable?)")
 	}
+	return "", nil, fmt.Errorf("gave up after %d referrals — delegation chain too long", maxReferrals)
 }
 
-// intro asks the registry to cue the target to punch back at us.
 func (a *agent) intro(target string) {
 	a.mu.Lock()
 	reg := a.regAddr

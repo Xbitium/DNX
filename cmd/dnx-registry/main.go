@@ -34,6 +34,7 @@ import (
 	"time"
 
 	"dnx/internal/proto"
+	"dnx/internal/zone"
 )
 
 // record is one row of the living name table.
@@ -58,6 +59,70 @@ type registry struct {
 	// key and all.
 	signPriv ed25519.PrivateKey
 	signPub  string // base64
+
+	// ---- federation ----
+	zoneName    string       // what this registry is authoritative for
+	delegations []delegation // branches handled elsewhere
+}
+
+// delegation records that some part of this registry's namespace is handled
+// elsewhere. The key is what a resolver will trust for that branch, so it is
+// as load-bearing as the address.
+type delegation struct {
+	Zone     string `json:"zone"`
+	Endpoint string `json:"endpoint"`
+	KeyB64   string `json:"key"`
+}
+
+// loadDelegations reads the delegation table and refuses any entry that does
+// not lie strictly beneath this registry's own zone.
+//
+// A registry that could delegate outside its own branch could hand away
+// namespace it was never given — the whole point of a hierarchy is that
+// authority only ever flows downward. Checking at load time means a
+// misconfiguration is a startup failure rather than a silent hole.
+func loadDelegations(path, ownZone string) ([]delegation, error) {
+	if path == "" {
+		return nil, nil
+	}
+	b, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var ds []delegation
+	if err := json.Unmarshal(b, &ds); err != nil {
+		return nil, fmt.Errorf("delegations %s: %w", path, err)
+	}
+	for _, d := range ds {
+		if !zone.IsNarrower(d.Zone, ownZone) {
+			return nil, fmt.Errorf("delegation of %q is not beneath this registry's zone %q — refusing to hand away namespace that is not ours",
+				d.Zone, ownZone)
+		}
+		if !proto.ValidPubKey(d.KeyB64) {
+			return nil, fmt.Errorf("delegation of %q has an invalid signing key", d.Zone)
+		}
+		if d.Endpoint == "" {
+			return nil, fmt.Errorf("delegation of %q has no endpoint", d.Zone)
+		}
+	}
+	return ds, nil
+}
+
+// delegationFor returns the most specific delegation covering name.
+func (r *registry) delegationFor(name string) *delegation {
+	var best *delegation
+	for i := range r.delegations {
+		d := &r.delegations[i]
+		if zone.Contains(d.Zone, name) {
+			if best == nil || zone.Depth(d.Zone) > zone.Depth(best.Zone) {
+				best = d
+			}
+		}
+	}
+	return best
 }
 
 type registryKeyFile struct {
@@ -331,6 +396,10 @@ func main() {
 		"administratively release a name and exit (for a lost key; requires shell access)")
 	keyPath := flag.String("key", "/var/lib/dnx/registry.key",
 		"the registry's own signing identity (empty generates an ephemeral one)")
+	zoneName := flag.String("zone", "",
+		"the namespace this registry is authoritative for, e.g. dnxroute.com (empty answers for anything)")
+	delegationsPath := flag.String("delegations", "",
+		"JSON file listing branches handled by other registries")
 	flag.Parse()
 
 	// Releasing a name is a file operation, not a network one — do it before
@@ -369,6 +438,21 @@ func main() {
 	// Operators must distribute this to nodes out of band; a node that cannot
 	// check the signature is trusting whoever answers.
 	log.Printf("registry signing key: %s", reg.signPub)
+
+	reg.zoneName = zone.Normalise(*zoneName)
+	if reg.zoneName == "" {
+		log.Printf("WARNING: no --zone. This registry will answer for any name, which is")
+		log.Printf("         only reasonable while it is the only one that exists.")
+	} else {
+		log.Printf("authoritative for %s", reg.zoneName)
+	}
+	reg.delegations, err = loadDelegations(*delegationsPath, reg.zoneName)
+	if err != nil {
+		log.Fatalf("delegations: %v", err)
+	}
+	for _, d := range reg.delegations {
+		log.Printf("delegated: %s -> %s (key %.12s…)", d.Zone, d.Endpoint, d.KeyB64)
+	}
 	restored, err := reg.load()
 	if err != nil {
 		log.Fatalf("cannot read ownership state from %s: %v", *statePath, err)
@@ -448,6 +532,32 @@ func (r *registry) handle(conn *net.UDPConn, src *net.UDPAddr, m *proto.Message)
 		reply(conn, src, &proto.Message{Kind: proto.KindRebindAck, Name: m.Name})
 
 	case proto.KindResolve:
+		// Authority first. A registry that answers for names outside its own
+		// zone is not a registry, it is an impostor with good intentions.
+		if r.zoneName != "" && !zone.Contains(r.zoneName, m.Target) {
+			reply(conn, src, errMsg("not authoritative for "+m.Target))
+			return
+		}
+
+		// Delegated branches are answered with a referral rather than a
+		// binding, even if this registry happens to hold a stale one.
+		if d := r.delegationFor(m.Target); d != nil {
+			ts := time.Now().UnixMilli()
+			ref := &proto.Message{
+				Kind:     proto.KindReferral,
+				Target:   m.Target,
+				Zone:     d.Zone,
+				Endpoint: d.Endpoint,
+				PubKey:   d.KeyB64,
+				TS:       ts,
+				Nonce:    m.Nonce,
+			}
+			ref.Sig = proto.SignDetached(r.signPriv,
+				proto.ReferralBytes(m.Target, d.Zone, d.Endpoint, d.KeyB64, ts, m.Nonce))
+			reply(conn, src, ref)
+			return
+		}
+
 		r.mu.Lock()
 		rec, ok := r.names[m.Target]
 		fresh := ok && rec.Endpoint != nil && time.Since(rec.LastSeen) < staleAfter
