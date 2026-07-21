@@ -39,6 +39,14 @@ const (
 	// session key inherits the registry's name->key trust.
 	KindHSInit = "HS_INIT" // node -> node : "here's my ephemeral X25519 key, signed"
 	KindHSResp = "HS_RESP" // node -> node : "here's mine, echoing your nonce, signed"
+
+	// KindRebind transfers a name to a new key. It must be signed by the
+	// CURRENT key: only the present owner may hand a name on. This is the
+	// only supported way to change a binding over the network — recovering a
+	// name whose key is LOST is not a cryptographic problem and is handled
+	// out of band by the namespace operator.
+	KindRebind    = "REBIND"
+	KindRebindAck = "REBIND_ACK"
 )
 
 // Message is the single envelope used for ALL DNX v0.1 traffic.
@@ -88,6 +96,47 @@ func (m *Message) Verify(pubB64 string) error {
 		return fmt.Errorf("signature verification FAILED for %q", m.Name)
 	}
 	return nil
+}
+
+// RebindBytes is the canonical string signed when transferring a name.
+//
+// It MUST include the new key. SigningBytes deliberately omits PubKey — that
+// is correct for REGISTER, where the key is self-asserted and the signature
+// proves possession of it. For a transfer it would be catastrophic: a
+// signature covering only the name would authorise moving that name to *any*
+// key, so anyone who observed one valid transfer could replay it to install
+// a key of their own choosing. Binding the destination key into the signed
+// string is what makes a captured transfer useless to an attacker.
+func RebindBytes(name, newPubB64 string, ts int64, nonce string) []byte {
+	return []byte(fmt.Sprintf("dnx-rebind1|%s|%s|%d|%s", name, newPubB64, ts, nonce))
+}
+
+// VerifyDetached checks a base64 signature over arbitrary bytes against a
+// base64 ed25519 public key.
+func VerifyDetached(pubB64 string, msg []byte, sigB64 string) error {
+	pub, err := base64.StdEncoding.DecodeString(pubB64)
+	if err != nil || len(pub) != ed25519.PublicKeySize {
+		return fmt.Errorf("bad public key")
+	}
+	sig, err := base64.StdEncoding.DecodeString(sigB64)
+	if err != nil {
+		return fmt.Errorf("bad signature encoding")
+	}
+	if !ed25519.Verify(pub, msg, sig) {
+		return fmt.Errorf("signature does not verify")
+	}
+	return nil
+}
+
+// ValidPubKey reports whether s is a well-formed base64 ed25519 public key.
+func ValidPubKey(s string) bool {
+	b, err := base64.StdEncoding.DecodeString(s)
+	return err == nil && len(b) == ed25519.PublicKeySize
+}
+
+// SignDetached signs arbitrary bytes with an ed25519 private key.
+func SignDetached(priv ed25519.PrivateKey, msg []byte) string {
+	return base64.StdEncoding.EncodeToString(ed25519.Sign(priv, msg))
 }
 
 // Encode marshals a message for the wire.

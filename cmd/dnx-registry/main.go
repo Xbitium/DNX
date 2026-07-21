@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
+	"fmt"
 	"log"
 	"net"
 	"os"
@@ -155,10 +156,9 @@ const (
 // it, and that ownership does not lapse merely because the node went quiet.
 func (r *registry) bind(name, pubB64 string, endpoint *net.UDPAddr, now time.Time) bindResult {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-
 	rec, exists := r.names[name]
 	if exists && rec.PubB64 != pubB64 {
+		r.mu.Unlock()
 		return bindRejected
 	}
 	if !exists {
@@ -167,10 +167,81 @@ func (r *registry) bind(name, pubB64 string, endpoint *net.UDPAddr, now time.Tim
 	}
 	rec.Endpoint = endpoint // observed source address = live NAT mapping
 	rec.LastSeen = now
+	r.mu.Unlock()
+
 	if exists {
+		// A heartbeat only moved the endpoint and the timestamp, which are
+		// liveness. Writing the file fifteen times a minute per node to
+		// record that would be pointless; the periodic flush covers it.
 		return bindRefreshed
 	}
+
+	// A brand-new claim is ownership, it is rare, and it is irreversible.
+	// Persist it here rather than trusting every future caller to remember —
+	// forgetting would lose the claim on the next restart, which is the
+	// failure this whole mechanism exists to prevent.
+	//
+	// Note the lock is released first: save() takes it too.
+	if err := r.save(); err != nil {
+		log.Printf("WARNING: could not persist new binding for %s: %v", name, err)
+	}
 	return bindNew
+}
+
+// rebind transfers a name to a new key. The signature must come from the
+// CURRENT key and must cover the NEW key (see proto.RebindBytes), so only the
+// present owner can hand the name on, and a captured transfer cannot be
+// replayed to install a different key.
+//
+// The endpoint is cleared: the machine that held the old key is no longer the
+// owner, and the new owner must register to prove liveness.
+func (r *registry) rebind(name, newPubB64, sigB64 string, ts int64, nonce string, now time.Time) error {
+	if !proto.ValidPubKey(newPubB64) {
+		return errors.New("new key is not a valid ed25519 public key")
+	}
+
+	r.mu.Lock()
+	rec, exists := r.names[name]
+	if !exists {
+		r.mu.Unlock()
+		return errors.New("name is not bound, so there is nothing to transfer")
+	}
+	current := rec.PubB64
+	r.mu.Unlock()
+
+	if current == newPubB64 {
+		return errors.New("new key is the same as the current key")
+	}
+	if err := proto.VerifyDetached(current, proto.RebindBytes(name, newPubB64, ts, nonce), sigB64); err != nil {
+		return fmt.Errorf("transfer not authorised by the current key: %w", err)
+	}
+
+	r.mu.Lock()
+	rec.PubB64 = newPubB64
+	rec.Endpoint = nil
+	rec.LastSeen = now
+	r.mu.Unlock()
+	return nil
+}
+
+// release removes a binding administratively. This is the answer to a LOST
+// key, which cryptography cannot solve: if the owner cannot sign, nothing
+// distinguishes them from someone claiming to be them.
+//
+// It is deliberately NOT reachable over the network. Releasing a name is an
+// authority decision, and the authority here is shell access to the machine
+// running the registry.
+func (r *registry) release(name string) error {
+	r.mu.Lock()
+	_, exists := r.names[name]
+	if exists {
+		delete(r.names, name)
+	}
+	r.mu.Unlock()
+	if !exists {
+		return fmt.Errorf("no binding for %q", name)
+	}
+	return r.save()
 }
 
 // prune separates the two lifetimes. A quiet node loses its ENDPOINT
@@ -199,7 +270,27 @@ func main() {
 	listen := flag.String("listen", ":4400", "UDP address to listen on")
 	statePath := flag.String("state", "/var/lib/dnx/registry.json",
 		"file holding persisted name ownership (empty disables persistence)")
+	release := flag.String("release", "",
+		"administratively release a name and exit (for a lost key; requires shell access)")
 	flag.Parse()
+
+	// Releasing a name is a file operation, not a network one — do it before
+	// binding anything and exit.
+	//
+	// NOTE FOR OPERATORS: stop the service first. A running registry holds
+	// its own copy of the table in memory and will overwrite the file on its
+	// next flush, silently undoing a release performed alongside it.
+	if *release != "" {
+		reg := &registry{names: map[string]*record{}, statePath: *statePath}
+		if _, err := reg.load(); err != nil {
+			log.Fatalf("cannot read ownership state from %s: %v", *statePath, err)
+		}
+		if err := reg.release(*release); err != nil {
+			log.Fatalf("release %s: %v", *release, err)
+		}
+		log.Printf("released %s — the name is now unclaimed and may be registered again", *release)
+		return
+	}
 
 	addr, err := net.ResolveUDPAddr("udp", *listen)
 	if err != nil {
@@ -209,6 +300,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("listen: %v", err)
 	}
+
 	log.Printf("dnx-registry up on %s — the name IS the address.", *listen)
 
 	reg := &registry{names: map[string]*record{}, statePath: *statePath}
@@ -262,11 +354,6 @@ func (r *registry) handle(conn *net.UDPConn, src *net.UDPAddr, m *proto.Message)
 			return
 		case bindNew:
 			log.Printf("NEW name bound: %s -> key %.12s… (at %s)", m.Name, m.PubKey, src)
-			// A new claim is rare and irreversible — write it out now rather
-			// than waiting for the periodic flush.
-			if err := r.save(); err != nil {
-				log.Printf("WARNING: could not persist new binding for %s: %v", m.Name, err)
-			}
 		}
 
 		// Ack echoes back the observed endpoint — lets the node learn
@@ -278,6 +365,23 @@ func (r *registry) handle(conn *net.UDPConn, src *net.UDPAddr, m *proto.Message)
 		})
 
 	// ---------------- RESOLVE: name -> (key, endpoint) ----------------
+	case proto.KindRebind:
+		if !freshTS(m.TS) {
+			reply(conn, src, errMsg("stale timestamp"))
+			return
+		}
+		// m.PubKey carries the NEW key; the signature is by the CURRENT one.
+		if err := r.rebind(m.Name, m.PubKey, m.Sig, m.TS, m.Nonce, time.Now()); err != nil {
+			log.Printf("REBIND refused for %s: %v", m.Name, err)
+			reply(conn, src, errMsg(err.Error()))
+			return
+		}
+		log.Printf("REBIND: %s transferred to key %.12s… (endpoint cleared)", m.Name, m.PubKey)
+		if err := r.save(); err != nil {
+			log.Printf("WARNING: could not persist transfer of %s: %v", m.Name, err)
+		}
+		reply(conn, src, &proto.Message{Kind: proto.KindRebindAck, Name: m.Name})
+
 	case proto.KindResolve:
 		r.mu.Lock()
 		rec, ok := r.names[m.Target]
