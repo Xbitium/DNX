@@ -33,6 +33,7 @@
   <div class="wrap doc">
     <aside class="toc">
       <div class="toc-title">Entries</div>
+      <a href="#e8">0008 · Signatures</a>
       <a href="#e7">0007 · Ownership</a>
       <a href="#e6">0006 · Naming</a>
       <a href="#e5">0005 · Four levels</a>
@@ -48,6 +49,23 @@
       <div class="prose">
         <p>A protocol is mostly a record of arguments someone had with themselves. These entries document why DNX is shaped the way it is — including the bugs that changed its design, which are usually more informative than the parts that worked first time.</p>
       </div>
+
+      <article id="e8" class="entry">
+        <div class="meta">JOURNAL 0008 · 20 JULY 2026</div>
+        <h3>What a signature has to say</h3>
+        <div class="prose">
+          <p>Making ownership durable solved one problem and created another. A name now survives its machine being switched off, and survives the registry restarting — but if the key were lost, the name was unusable for a year with no way back. Durability without a release mechanism is just a slower kind of breakage.</p>
+          <p>The instinct is to add a recovery message. The more useful discipline is to first ask which half of the problem cryptography can actually solve.</p>
+          <p><strong>Rotation it can.</strong> If you hold the current key, you can sign a statement handing the name to a new one, and the registry can verify that with no authority involved at all.</p>
+          <p><strong>Loss it cannot.</strong> If you cannot sign, nothing distinguishes you from somebody claiming to be you. No amount of protocol design changes that. Releasing a name is therefore an authority decision, and became an operator command requiring shell access on the registry host — never a network message, because a network-reachable override is an attack surface wearing a helpful label.</p>
+          <p>The interesting part was the signature itself. The ordinary message signature deliberately omits the key field, which is correct for registration: the key is self-asserted, and signing with it proves possession. Reusing that for a transfer would have been a disaster. The signature would have said <em>move this name</em> without saying <em>where</em> — so anyone who observed one legitimate transfer could have replayed it to install a key of their own choosing.</p>
+          <p>The transfer therefore signs over its own string, with the destination key inside it. That claim was checked the way the others have been: by removing the destination key from the signed bytes and confirming that a captured transfer could then be redirected to an attacker.</p>
+        </div>
+        <div class="callout">
+          <div class="t">Rule extracted</div>
+          <p>A signature authorises exactly what it covers, and nothing more. Before reusing one, read what is actually inside it — an omission that is harmless in one message can be catastrophic in another.</p>
+        </div>
+      </article>
 
       <article id="e7" class="entry">
         <div class="meta">JOURNAL 0007 · 20 JULY 2026</div>

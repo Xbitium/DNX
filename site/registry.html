@@ -185,7 +185,7 @@
             <li><strong>Signed responses.</strong> Registry replies are unsigned, so an on-path attacker can forge resolution answers. This does not permit impersonation — a forged endpoint still cannot produce replies that verify against the genuine key — but it permits denial of service.</li>
             <li><strong>Replication.</strong> No failover, no anycast, no replicas.</li>
             <li><strong>Metadata privacy.</strong> The single registry observes every resolution, and therefore knows who talks to whom. Delegation improves this by scoping each registry's view to its own zone, but does not eliminate it.</li>
-            <li><strong>Ownership binding.</strong> Nothing ties a DNX name to actual control of the corresponding domain, so any unclaimed name may currently be registered by anyone. Once claimed, however, it cannot be taken — including while its owner is offline.</li>
+            <li><strong>Ownership binding.</strong> Nothing ties a DNX name to actual control of the corresponding domain, so any unclaimed name may currently be registered by anyone. Once claimed it cannot be taken — including while its owner is offline, or while the registry itself is restarting. It can be handed on deliberately with a transfer signed by the current key, or released by the registry operator when a key has been lost.</li>
           </ul>
           <p>These are listed in the <a href="/protocol#security">protocol's security section</a> as well. A design note that described only the intended architecture, without saying how much of it is imaginary, would be marketing.</p>
         </div>
