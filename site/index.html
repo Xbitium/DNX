@@ -26,6 +26,7 @@
       <nav class="nav">
         <a href="/learn">Learn</a>
         <a href="/protocol">Protocol</a>
+        <a href="/registry">Registry</a>
         <a href="/compare">Compare</a>
         <a href="/journal">Journal</a>
         <a href="/playground">Playground</a>
@@ -205,6 +206,67 @@
       <div class="callout">
         <div class="t">Try it yourself</div>
         <p>A packet routing across two datacenters, hop by hop, purely by name — with the real forwarding trace streamed back live from both machines: <a href="https://routing.dnxroute.com">routing.dnxroute.com</a></p>
+      </div>
+    </section>
+
+    <!-- ============ REGISTRY & FEDERATION ============ -->
+    <section class="wrap section">
+      <p class="eyebrow">The registry</p>
+      <h2>So who controls the names?</h2>
+      <div class="prose">
+        <p>This is the first question worth asking about DNX, and the honest answer today is uncomfortable: <strong>one server, run by one person.</strong> That is a prototype's answer, not an architecture's, and it is the largest unbuilt part of the design.</p>
+        <p>What the architecture intends is the same thing DNS already does — delegation. The unit of authority is a <strong>zone</strong>, and whoever operates a name runs the registry for everything beneath it. A company runs its own for its own namespace, inside its own network if it prefers, and nobody outside needs to know it exists.</p>
+      </div>
+
+      <figure class="diagram">
+        <svg viewBox="0 0 900 330" role="img" aria-label="A top-level registry delegating to organisation registries, each authoritative for its own branch.">
+          <defs><marker id="fed" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M1 1 L9 5 L1 9" fill="none" stroke="#0f5f68" stroke-width="1.6" /></marker></defs>
+
+          <rect class="svg-box-accent" x="330" y="16" width="240" height="58" />
+          <text class="svg-strong" x="352" y="42">.com registry</text>
+          <text class="svg-sub" x="352" y="60">delegates, stores nothing else</text>
+
+          <path class="svg-arrow" d="M400,78 L250,128" marker-end="url(#fed)" />
+          <path class="svg-arrow" d="M500,78 L650,128" marker-end="url(#fed)" />
+
+          <rect class="svg-box-accent" x="60" y="134" width="280" height="58" />
+          <text class="svg-strong" x="82" y="160">dnxroute.com</text>
+          <text class="svg-sub" x="82" y="178">authoritative for its own branch</text>
+
+          <rect class="svg-box-accent" x="560" y="134" width="280" height="58" />
+          <text class="svg-strong" x="582" y="160">yourcompany.com</text>
+          <text class="svg-sub" x="582" y="178">runs its own, privately</text>
+
+          <path class="svg-arrow" d="M200,196 L200,236" marker-end="url(#fed)" />
+          <path class="svg-arrow" d="M700,196 L700,236" marker-end="url(#fed)" />
+
+          <rect class="svg-box" x="60" y="242" width="280" height="46" />
+          <text class="svg-sub" x="82" y="270">host1.dnx.dnxroute.com</text>
+
+          <rect class="svg-box" x="560" y="242" width="280" height="46" />
+          <text class="svg-sub" x="582" y="270">laptop.eng.yourcompany.com</text>
+
+          <text class="svg-sub" x="450" y="316" text-anchor="middle">Nobody runs "the" registry — each operator runs their own branch, exactly as DNS delegates today.</text>
+        </svg>
+        <figcaption>The same hierarchy does three jobs at once: it routes packets, it delegates authority, and it decides who may name what. That is not a coincidence — it falls out of using the namespace as the topology.</figcaption>
+      </figure>
+
+      <div class="grid-2">
+        <div class="prose">
+          <h3>What a registry actually does</h3>
+          <p>Three jobs are currently bundled into one service, and they have nothing in common. <strong>Naming authority</strong> answers who owns a name and changes almost never. <strong>Location directory</strong> answers where that name is right now and changes constantly. <strong>Rendezvous</strong> introduces two peers so they can punch through NAT, and holds nothing at all.</p>
+          <p>Separating them is most of the deployment story, because they want completely different trust, scale and caching.</p>
+        </div>
+        <div class="card">
+          <h3>Honest gaps</h3>
+          <ul>
+            <li>No delegation between registries yet — there is only one.</li>
+            <li>Registry replies are unsigned, so an on-path attacker can forge resolution answers.</li>
+            <li>No replication, so it is a single point of failure.</li>
+            <li>It observes every resolution, and therefore knows who talks to whom.</li>
+          </ul>
+          <p style="margin-top:12px"><a href="/registry">Read the full design note →</a></p>
+        </div>
       </div>
     </section>
 
