@@ -80,7 +80,7 @@
         <table class="spec">
           <thead><tr><th>Number</th><th>Title</th><th>Status</th></tr></thead>
           <tbody>
-            <tr><td><a href="#p1">DNXP-0001</a></td><td>Variable-length namespace paths</td><td><span class="badge draft">Draft</span></td></tr>
+            <tr><td><a href="#p1">DNXP-0001</a></td><td>Variable-length namespace paths</td><td><span class="badge live">Implemented</span> <span class="muted" style="font-size:.8rem">not yet on the live network</span></td></tr>
           </tbody>
         </table>
       </section>
@@ -88,7 +88,8 @@
       <section id="p1" class="section" style="padding-left:0;padding-right:0">
         <h2>DNXP-0001 · Variable-length namespace paths</h2>
         <div class="prose">
-          <p><strong>Status:</strong> <span class="badge draft">Draft</span> · <strong>Replaces:</strong> the fixed four-field destination address in the current implementation.</p>
+          <p><strong>Status:</strong> <span class="badge live">Implemented</span> · <strong>Replaces:</strong> the fixed four-field destination address in the current implementation.</p>
+          <p>The library exists and is tested, and writing it settled two of the questions this proposal originally left open (below). It is <em>not</em> yet carrying traffic: the live demonstration still uses the fixed address, because replacing a working demonstration with an untested one is not an improvement. Migration follows the staged plan at the end of this document.</p>
           <p><strong>Summary.</strong> Replace the fixed 256-bit destination — four 64-bit fields for top level, domain, subdomain and host — with a variable-length ordered path of numeric namespace identifiers resolved by the registry. Hierarchy depth becomes unbounded, and no text ever appears on the wire.</p>
         </div>
 
@@ -171,10 +172,10 @@ wire       [ count = 4 ][ 1A2B ][ 4C19 ][ 0007 ][ 0031 ]</code></pre>
         <h3 id="p1-open">Open questions</h3>
         <div class="prose">
           <ul>
-            <li><strong>Identifier reuse.</strong> If a namespace is deleted and its identifier later reassigned, packets in flight or held in stale tables could route to the wrong destination. A generation counter or a mandatory retirement period is probably required. Unresolved.</li>
-            <li><strong>Diagnosis.</strong> With only opaque numbers on the wire, a misrouted packet cannot be understood without registry lookups. Something equivalent to reverse resolution is needed before anyone can debug a live network. Unresolved.</li>
+            <li><strong>Identifier reuse. <span class="badge live">Answered</span></strong> Generation counters turned out to be unnecessary. Allocation is monotonic and an identifier is never reissued, so a packet in flight or a stale forwarding entry can never be delivered to something that inherited its number. Four billion allocations beneath a single parent is not a limit anyone will reach, and never reusing is simpler than versioning what was reused.</li>
+            <li><strong>Diagnosis. <span class="badge live">Answered</span></strong> The implementation provides reverse resolution: a path can be translated back into the name it was addressed to, and an identifier that was never allocated is reported as unknown rather than guessed at. Without this a misdelivered packet is an unreadable row of integers, which is exactly the situation in which someone needs to read it.</li>
+            <li><strong>Depth limit. <span class="badge live">Answered</span></strong> Capped at sixteen levels. The count field could express 255; nothing legitimate approaches sixteen, and an unbounded walk is an invitation. Encoding or decoding a deeper path is refused.</li>
             <li><strong>Table population.</strong> Routers must learn which identifiers map to which next hop. Today those tables are configured by hand. This proposal does not address how they would be distributed, which remains the largest unbuilt piece of the routing design.</li>
-            <li><strong>Depth limits.</strong> A one-byte count permits 255 levels. Whether an explicit lower cap should be enforced, to bound worst-case forwarding work, is undecided.</li>
           </ul>
         </div>
 
