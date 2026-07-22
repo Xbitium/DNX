@@ -40,6 +40,11 @@ type sealedPayload struct {
 	SID  uint32 `json:"s,omitempty"` // stream id, scoped to this session
 	Port int    `json:"p,omitempty"` // target TCP port for OPEN
 	Info string `json:"i,omitempty"` // error detail for OPENERR
+
+	// Probe marks an OPEN that only asks whether a tunnel WOULD be accepted.
+	// The responder checks its allowlist and confirms the local service is
+	// listening, then closes immediately without creating a stream.
+	Probe bool `json:"pr,omitempty"`
 }
 
 // ---------------------------------------------------------------------------
@@ -327,9 +332,12 @@ func (a *agent) handleSealed(src *net.UDPAddr, frame []byte) {
 
 	case "OPENOK":
 		log.Printf("tunnel %d: peer %s accepted", p.SID, p.Name)
+		// Wake anyone waiting on a probe.
+		a.deliver(&proto.Message{Kind: proto.KindPong, Nonce: tunnelWaitKey(p.SID)})
 
 	case "OPENERR":
 		log.Printf("tunnel %d: peer %s refused: %s", p.SID, p.Name, p.Info)
+		a.deliver(&proto.Message{Kind: proto.KindError, Nonce: tunnelWaitKey(p.SID), Info: p.Info})
 		if ts := a.tunnels.get(p.SID); ts != nil {
 			ts.close()
 			a.tunnels.remove(p.SID)

@@ -29,6 +29,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"dnx/internal/proto"
 	"dnx/internal/stream"
 )
 
@@ -138,9 +139,63 @@ func decodeStreamPayload(b []byte) (uint32, []byte, bool) {
 // Opening a tunnel (client side)
 // ---------------------------------------------------------------------------
 
+// tunnelWaitKey names the waiter a probe response wakes.
+func tunnelWaitKey(sid uint32) string { return fmt.Sprintf("TUNNEL|%d", sid) }
+
+// probeTunnel asks the peer whether a tunnel to remotePort would be accepted,
+// and waits for the answer.
+//
+// Without this the CLI reports success the moment it opens a LOCAL listener,
+// which tells the operator nothing: the first OPEN is not sent until someone
+// connects, so a tunnel to a port the peer refuses looks identical to a
+// working one until traffic silently fails. Better to find out now.
+func (a *agent) probeTunnel(peerName string, remotePort int, timeout time.Duration) error {
+	peerKey, peerAddr, err := a.resolve(peerName, timeout)
+	if err != nil {
+		return fmt.Errorf("cannot resolve %s: %w", peerName, err)
+	}
+	a.intro(peerName)
+	sess, err := a.getSession(peerName, peerKey, peerAddr, timeout)
+	if err != nil {
+		return fmt.Errorf("no session with %s: %w", peerName, err)
+	}
+	if sess.PeerIDKey != peerKey {
+		return fmt.Errorf("session key does not match the registry's binding for %s", peerName)
+	}
+
+	sid := a.tunnels.allocID()
+	key := tunnelWaitKey(sid)
+	ch := a.wait(key)
+	defer a.unwait(key)
+
+	a.mu.Lock()
+	addr := a.sessions[peerName].addr
+	a.mu.Unlock()
+
+	open, _ := json.Marshal(sealedPayload{
+		Kind: "OPEN", Name: a.id.Name, SID: sid, Port: remotePort, Probe: true,
+	})
+	a.conn.WriteToUDP(sess.Seal(open), addr)
+
+	select {
+	case m := <-ch:
+		if m.Kind == proto.KindError {
+			return fmt.Errorf("%s refused a tunnel to port %d: %s", peerName, remotePort, m.Info)
+		}
+		return nil
+	case <-time.After(timeout):
+		return fmt.Errorf("%s did not answer a tunnel request for port %d", peerName, remotePort)
+	}
+}
+
 // serveTunnel listens on a local TCP port and pipes every accepted
 // connection to `remotePort` on the named peer, over DNX.
 func (a *agent) serveTunnel(peerName string, localPort, remotePort int) error {
+	// Confirm the far end will actually accept before claiming the tunnel is up.
+	if err := a.probeTunnel(peerName, remotePort, 12*time.Second); err != nil {
+		return err
+	}
+
 	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", localPort))
 	if err != nil {
 		return fmt.Errorf("cannot listen on port %d: %w", localPort, err)
@@ -225,6 +280,24 @@ func (a *agent) handleTunnelOpen(peerName string, p sealedPayload, seal func([]b
 
 	target := fmt.Sprintf("127.0.0.1:%d", p.Port)
 	conn, err := net.DialTimeout("tcp", target, 8*time.Second)
+
+	// A probe only asks whether this would work. Answer and close; creating a
+	// stream for a connection nobody made would leak one per probe.
+	if p.Probe {
+		if err != nil {
+			log.Printf("tunnel probe from %s for port %d: %v", peerName, p.Port, err)
+			resp, _ := json.Marshal(sealedPayload{Kind: "OPENERR", Name: a.id.Name, SID: p.SID,
+				Info: fmt.Sprintf("port %d is permitted but nothing is listening on it", p.Port)})
+			a.conn.WriteToUDP(seal(resp), addr)
+			return
+		}
+		conn.Close()
+		log.Printf("tunnel probe from %s for port %d: ok", peerName, p.Port)
+		resp, _ := json.Marshal(sealedPayload{Kind: "OPENOK", Name: a.id.Name, SID: p.SID})
+		a.conn.WriteToUDP(seal(resp), addr)
+		return
+	}
+
 	if err != nil {
 		log.Printf("tunnel: cannot reach %s for %s: %v", target, peerName, err)
 		resp, _ := json.Marshal(sealedPayload{Kind: "OPENERR", Name: a.id.Name, SID: p.SID,

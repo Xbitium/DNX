@@ -23,10 +23,12 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 
 	"dnx/internal/dnxaddr"
+	"dnx/internal/nspath"
 )
 
 // ---------------------------------------------------------------------------
@@ -39,36 +41,107 @@ import (
 // on-the-wire equivalent of "mark_resolved" from the concept doc.
 // The payload is itself a sealed ChaCha20 frame (0xD8) — routers never open it.
 // ---------------------------------------------------------------------------
-const routeMagic = 0xDF
+const (
+	routeMagic = 0xDF // fixed four-field address (the original format)
+	pathMagic  = 0xDE // variable-length namespace path (DNXP-0001)
+)
 
-type routedFrame struct {
-	addr     dnxaddr.Addr
-	consumed int
-	payload  []byte // opaque sealed bytes
+// destination is whatever a frame carries as its target. The two formats
+// differ only in how a level is read and which table answers for it; the walk
+// itself — read one level, look it up, forward, never look lower — is the
+// same, which is what makes running both at once tolerable rather than a
+// second implementation of the routing logic.
+type destination interface {
+	// keyAt returns the forwarding-table key for the given level.
+	keyAt(depth int) (string, bool)
+	// tableFor returns the table this format consults on a given router.
+	tableFor(r *routerCfg) map[string]string
+	// encode renders the frame for the next hop.
+	encode(consumed int, payload []byte) []byte
+	// format names the wire format, for telemetry.
+	format() string
 }
 
-func decodeFrame(b []byte) (*routedFrame, error) {
-	if len(b) < 1+32+2 || b[0] != routeMagic {
-		return nil, fmt.Errorf("not a DNX routed frame")
-	}
-	var f routedFrame
-	for i := 0; i < 4; i++ {
-		f.addr.Field[i] = binary.BigEndian.Uint64(b[1+i*8:])
-	}
-	f.consumed = int(binary.BigEndian.Uint16(b[33:]))
-	f.payload = b[35:]
-	return &f, nil
-}
+// ---- fixed four-field address ----
 
-func (f *routedFrame) encode() []byte {
-	b := make([]byte, 35+len(f.payload))
+type fixedDest struct{ addr dnxaddr.Addr }
+
+func (d fixedDest) keyAt(depth int) (string, bool) {
+	if depth < 0 || depth > 3 {
+		return "", false
+	}
+	return hex64(d.addr.FieldAt(depth)), true
+}
+func (d fixedDest) tableFor(r *routerCfg) map[string]string { return r.Entries }
+func (d fixedDest) format() string                          { return "fixed-address" }
+func (d fixedDest) encode(consumed int, payload []byte) []byte {
+	b := make([]byte, 35+len(payload))
 	b[0] = routeMagic
 	for i := 0; i < 4; i++ {
-		binary.BigEndian.PutUint64(b[1+i*8:], f.addr.Field[i])
+		binary.BigEndian.PutUint64(b[1+i*8:], d.addr.Field[i])
 	}
-	binary.BigEndian.PutUint16(b[33:], uint16(f.consumed))
-	copy(b[35:], f.payload)
+	binary.BigEndian.PutUint16(b[33:], uint16(consumed))
+	copy(b[35:], payload)
 	return b
+}
+
+// ---- variable-length namespace path (DNXP-0001) ----
+
+type pathDest struct{ path nspath.Path }
+
+func (d pathDest) keyAt(depth int) (string, bool) {
+	nid, ok := d.path.At(depth)
+	if !ok {
+		return "", false
+	}
+	return strconv.FormatUint(uint64(nid), 10), true
+}
+func (d pathDest) tableFor(r *routerCfg) map[string]string { return r.NIDs }
+func (d pathDest) format() string                          { return "namespace-path" }
+func (d pathDest) encode(consumed int, payload []byte) []byte {
+	enc, err := d.path.Encode()
+	if err != nil {
+		return nil
+	}
+	b := make([]byte, 1+len(enc)+2+len(payload))
+	b[0] = pathMagic
+	copy(b[1:], enc)
+	binary.BigEndian.PutUint16(b[1+len(enc):], uint16(consumed))
+	copy(b[1+len(enc)+2:], payload)
+	return b
+}
+
+// decodeAny parses either wire format, distinguished by the first byte.
+func decodeAny(b []byte) (destination, int, []byte, error) {
+	if len(b) < 1 {
+		return nil, 0, nil, fmt.Errorf("empty frame")
+	}
+	switch b[0] {
+	case routeMagic:
+		if len(b) < 1+32+2 {
+			return nil, 0, nil, fmt.Errorf("truncated fixed-address frame")
+		}
+		var a dnxaddr.Addr
+		for i := 0; i < 4; i++ {
+			a.Field[i] = binary.BigEndian.Uint64(b[1+i*8:])
+		}
+		return fixedDest{addr: a}, int(binary.BigEndian.Uint16(b[33:])), b[35:], nil
+
+	case pathMagic:
+		if len(b) < 2 {
+			return nil, 0, nil, fmt.Errorf("truncated path frame")
+		}
+		p, err := nspath.Decode(b[1:])
+		if err != nil {
+			return nil, 0, nil, fmt.Errorf("path frame: %w", err)
+		}
+		encLen := nspath.EncodedLen(p.Depth())
+		if len(b) < 1+encLen+2 {
+			return nil, 0, nil, fmt.Errorf("truncated path frame")
+		}
+		return pathDest{path: p}, int(binary.BigEndian.Uint16(b[1+encLen:])), b[1+encLen+2:], nil
+	}
+	return nil, 0, nil, fmt.Errorf("unrecognised frame marker 0x%02X", b[0])
 }
 
 // ---------------------------------------------------------------------------
@@ -77,9 +150,14 @@ func (f *routedFrame) encode() []byte {
 
 // routerCfg is one router hosted by this daemon.
 type routerCfg struct {
-	Name    string            `json:"name"`
-	Depth   int               `json:"depth"`   // 0=TLD..3=host — which field it matches
-	Entries map[string]string `json:"entries"` // hex64 field value -> next-hop label
+	Name  string `json:"name"`
+	Depth int    `json:"depth"` // which level of the destination this router reads
+
+	// Entries answers for the fixed four-field address: hex64 value -> hop.
+	Entries map[string]string `json:"entries"`
+	// NIDs answers for a namespace path: decimal identifier -> hop.
+	// A router may serve both while the two formats run side by side.
+	NIDs map[string]string `json:"nids"`
 }
 
 // nodeCfg is this daemon's whole config.
@@ -88,6 +166,12 @@ type nodeCfg struct {
 	Routers  []routerCfg       `json:"routers"`  // routers hosted here (in resolution order)
 	Hops     map[string]string `json:"hops"`     // next-hop label -> "ip:port" (or ":local"/":deliver")
 	Firsthop string            `json:"firsthop"` // which local router a fresh packet enters at
+
+	// Namespace lists the names this node allocates paths for, in order.
+	// Allocation is deterministic, so every node that lists the same names in
+	// the same order derives the same paths — which is what lets a static
+	// topology use them before the registry hands them out.
+	Namespace []string `json:"namespace"`
 }
 
 // ---------------------------------------------------------------------------
@@ -101,6 +185,11 @@ type daemon struct {
 
 	mu     sync.Mutex
 	events []event // ring buffer of recent telemetry for the dashboard
+
+	// ns allocates namespace paths for the names this node knows about.
+	// Allocation is deterministic, so every node listing the same names in
+	// the same order derives identical paths.
+	ns *nspath.Tree
 }
 
 type event struct {
@@ -135,7 +224,15 @@ func main() {
 		log.Fatalf("listen: %v", err)
 	}
 
-	d := &daemon{cfg: cfg, conn: conn, routers: map[int]*routerCfg{}}
+	d := &daemon{cfg: cfg, conn: conn, routers: map[int]*routerCfg{}, ns: nspath.NewTree()}
+	for _, n := range cfg.Namespace {
+		p, err := d.ns.Allocate(n)
+		if err != nil {
+			log.Fatalf("namespace %q: %v", n, err)
+		}
+		log.Printf("  namespace %s -> [%s] (%d bytes on the wire, vs 32 fixed)",
+			n, p.String(), nspath.EncodedLen(p.Depth()))
+	}
 	for i := range cfg.Routers {
 		r := &cfg.Routers[i]
 		d.routers[r.Depth] = r
@@ -159,91 +256,104 @@ func (d *daemon) readLoop() {
 		if err != nil {
 			continue
 		}
-		f, err := decodeFrame(buf[:n])
+		dest, consumed, payload, err := decodeAny(buf[:n])
 		if err != nil {
 			continue
 		}
-		d.route(f, src)
+		d.route(dest, consumed, payload, src)
 	}
 }
 
 // route walks the frame through every local router whose depth is next,
 // emitting telemetry, until it must leave this node (forward to another box),
 // deliver, or drop.
-func (d *daemon) route(f *routedFrame, src *net.UDPAddr) {
+// route walks a destination through the routers hosted on this node,
+// emitting telemetry, until the frame must leave, deliver, or drop.
+//
+// The walk is identical for both wire formats: read the one level this router
+// owns, look it up, forward. Only the lookup key and the table differ, which
+// is the whole reason both can run at once without a second copy of this
+// logic — and the reason the migration can be gradual rather than a flag day.
+func (d *daemon) route(dest destination, consumed int, payload []byte, src *net.UDPAddr) {
 	for {
-		r, hosted := d.routers[f.consumed]
+		r, hosted := d.routers[consumed]
 		if !hosted {
-			// The tier this frame needs isn't handled here. Shouldn't happen if
-			// links are correct; drop with telemetry.
-			d.emit(event{Node: d.cfg.Node, Action: "drop", Detail: fmt.Sprintf("no local router for depth %d", f.consumed)})
+			d.emit(event{Node: d.cfg.Node, Action: "drop",
+				Detail: fmt.Sprintf("no local router for level %d (%s)", consumed, dest.format())})
 			return
 		}
 
-		field := f.addr.FieldAt(r.Depth)
-		key := hex64(field)
-		nextLabel, ok := r.Entries[key]
-
+		key, ok := dest.keyAt(r.Depth)
 		if !ok {
+			d.emit(event{Node: d.cfg.Node, Router: r.Name, Action: "drop",
+				Detail: fmt.Sprintf("destination has no level %d", r.Depth)})
+			return
+		}
+
+		table := dest.tableFor(r)
+		nextLabel, known := table[key]
+		if !known {
 			d.emit(event{
 				Node: d.cfg.Node, Router: r.Name, Field: dnxaddr.FieldName(r.Depth),
 				Value: key, Action: "drop",
-				Detail: r.Name + " is authoritative for " + dnxaddr.FieldName(r.Depth) + "; no route for " + key,
+				Detail: r.Name + " is authoritative for level " + strconv.Itoa(r.Depth) +
+					"; no route for " + key + " (" + dest.format() + ")",
 			})
 			return
 		}
 
-		// Resolve where this next-hop label points.
-		dest, known := d.cfg.Hops[nextLabel]
-		if !known {
-			d.emit(event{Node: d.cfg.Node, Router: r.Name, Action: "drop", Detail: "unknown hop label " + nextLabel})
+		hop, hopKnown := d.cfg.Hops[nextLabel]
+		if !hopKnown {
+			d.emit(event{Node: d.cfg.Node, Router: r.Name, Action: "drop",
+				Detail: "unknown hop label " + nextLabel})
 			return
 		}
 
-		f.consumed++ // this tier is now resolved
+		consumed++
 
-		switch dest {
+		switch hop {
 		case ":deliver", ":local":
 			d.emit(event{
 				Node: d.cfg.Node, Router: r.Name, Field: dnxaddr.FieldName(r.Depth),
 				Value: key, NextHop: nextLabel, Action: "deliver",
-				Detail: "matched " + dnxaddr.FieldName(r.Depth) + "; delivered on " + d.cfg.Node,
+				Detail: "matched level " + strconv.Itoa(r.Depth) + " (" + dest.format() + "); delivered on " + d.cfg.Node,
 			})
 			return
 
 		case ":localnext":
-			// Next tier is handled by another router on THIS same node.
-			if _, ok := d.routers[f.consumed]; !ok {
+			if _, ok := d.routers[consumed]; !ok {
 				d.emit(event{Node: d.cfg.Node, Router: r.Name, Action: "drop",
-					Detail: fmt.Sprintf("localnext but no router at depth %d", f.consumed)})
+					Detail: fmt.Sprintf("localnext but no router for level %d", consumed)})
 				return
 			}
 			d.emit(event{
 				Node: d.cfg.Node, Router: r.Name, Field: dnxaddr.FieldName(r.Depth),
 				Value: key, NextHop: nextLabel, Action: "forward",
-				Detail: "matched " + dnxaddr.FieldName(r.Depth) + " -> next tier on same node",
+				Detail: "matched level " + strconv.Itoa(r.Depth) + " (" + dest.format() + ") -> next level on same node",
 			})
-			continue // loop to the next local router
+			continue
 
 		default:
-			// Remote: send across the internet to the next daemon's ip:port.
 			d.emit(event{
 				Node: d.cfg.Node, Router: r.Name, Field: dnxaddr.FieldName(r.Depth),
 				Value: key, NextHop: nextLabel, Action: "forward",
-				Detail: "matched " + dnxaddr.FieldName(r.Depth) + " -> " + nextLabel + " @ " + dest + " (CROSS-INTERNET)",
+				Detail: "matched level " + strconv.Itoa(r.Depth) + " (" + dest.format() + ") -> " +
+					nextLabel + " @ " + hop + " (CROSS-INTERNET)",
 			})
-			d.sendTo(dest, f)
+			d.sendTo(hop, dest, consumed, payload)
 			return
 		}
 	}
 }
 
-func (d *daemon) sendTo(dest string, f *routedFrame) {
-	addr, err := net.ResolveUDPAddr("udp", dest)
+func (d *daemon) sendTo(hop string, dest destination, consumed int, payload []byte) {
+	addr, err := net.ResolveUDPAddr("udp", hop)
 	if err != nil {
 		return
 	}
-	d.conn.WriteToUDP(f.encode(), addr)
+	if b := dest.encode(consumed, payload); b != nil {
+		d.conn.WriteToUDP(b, addr)
+	}
 }
 
 func hex64(v uint64) string {
@@ -301,21 +411,44 @@ func (d *daemon) serveTelemetry(listen string) {
 	// body: {"name":"host1.disa.dnxroute.com"}  — resolved to a 256-bit addr here.
 	mux.HandleFunc("/inject", cors(func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
-			Name string `json:"name"`
+			Name   string `json:"name"`
+			Format string `json:"format"`
 		}
 		json.NewDecoder(r.Body).Decode(&body)
+		// A fake sealed payload (0xD8) — routers never open it.
+		payload := append([]byte{0xD8}, []byte("sealed-demo-payload")...)
+
+		if body.Format == "path" {
+			p, err := d.ns.Resolve(body.Name)
+			if err != nil {
+				writeJSON(w, map[string]any{"error": err.Error()})
+				return
+			}
+			enc, _ := p.Encode()
+			d.emit(event{Node: d.cfg.Node, Action: "inject",
+				Detail: body.Name + " = [" + p.String() + "] via namespace path, " + strconv.Itoa(len(enc)) + " bytes",
+				Value:  p.String()})
+			d.route(pathDest{path: p}, 0, payload, nil)
+			writeJSON(w, map[string]any{
+				"injected": body.Name, "format": "namespace-path",
+				"path": p.String(), "wire_bytes": len(enc),
+			})
+			return
+		}
+
 		reg := dnxaddr.NewRegistry()
 		a, err := reg.FromName(body.Name)
 		if err != nil {
 			writeJSON(w, map[string]any{"error": err.Error()})
 			return
 		}
-		// A fake sealed payload (0xD8) — routers never open it.
-		payload := append([]byte{0xD8}, []byte("sealed-demo-payload")...)
-		f := &routedFrame{addr: a, consumed: 0, payload: payload}
-		d.emit(event{Node: d.cfg.Node, Action: "inject", Detail: body.Name + " = " + a.String(), Value: a.String()})
-		d.route(f, nil)
-		writeJSON(w, map[string]any{"injected": body.Name, "address": a.String()})
+		d.emit(event{Node: d.cfg.Node, Action: "inject",
+			Detail: body.Name + " = " + a.String() + " via fixed address, 32 bytes", Value: a.String()})
+		d.route(fixedDest{addr: a}, 0, payload, nil)
+		writeJSON(w, map[string]any{
+			"injected": body.Name, "format": "fixed-address",
+			"address": a.String(), "wire_bytes": 32,
+		})
 	}))
 
 	// GET /topology -> this node's routers and links, for the dashboard diagram.
