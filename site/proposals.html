@@ -183,8 +183,8 @@ wire       [ count = 4 ][ 1A2B ][ 4C19 ][ 0007 ][ 0031 ]</code></pre>
         <div class="prose">
           <p>This is a breaking change to the routed frame format. The migration path follows the pattern already used elsewhere in DNX, where formats are distinguished by their first byte and coexist during transition:</p>
           <ol>
-            <li>Implement the new path format alongside the existing fixed address, under a distinct frame marker.</li>
-            <li>Run both on the live network, with routers accepting either.</li>
+            <li><span class="badge live">Done</span> Implement the new path format alongside the existing fixed address, under a distinct frame marker. Routers now decode either, and both share one forwarding walk rather than there being a second copy of the routing logic. Demonstrated through a single topology: a fixed address delivered to one host and a namespace path to another, both crossing the inter-node hop.</li>
+            <li>Run both on the live network, with routers accepting either. <em>Built, not yet deployed.</em></li>
             <li>Move the public demonstration to the new format once it has been exercised.</li>
             <li>Remove the fixed-address path.</li>
           </ol>
