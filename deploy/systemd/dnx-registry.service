@@ -1,0 +1,9 @@
+[Unit]
+Description=DNX Registry (living name table)
+After=network.target
+[Service]
+ExecStart=/usr/local/bin/dnx-registry --listen :4400
+Restart=always
+RestartSec=3
+[Install]
+WantedBy=multi-user.target

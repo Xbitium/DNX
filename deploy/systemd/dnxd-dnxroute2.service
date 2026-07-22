@@ -1,0 +1,9 @@
+[Unit]
+Description=DNX Node Agent
+After=network.target dnx-registry.service
+[Service]
+ExecStart=/usr/local/bin/dnxd --name dnxroute2.internal.dnxroute.com --registry registry.dnxroute.com:4400 --registry-key kIEvK2FGkmKq5BQNUMWmh4ZQdOoOa7yrJnRbhgx0s4Q=
+Restart=always
+RestartSec=3
+[Install]
+WantedBy=multi-user.target
