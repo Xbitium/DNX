@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DNX Whitepaper — Identity-Native Networking over a Name Hierarchy</title>
+  <meta name="description" content="The DNX whitepaper: identity, the registry and its federation, NAT traversal, session and stream layers, the routing model and its aggregation analysis, measurements from the live deployment, and a candid account of what is broken." />
+  <meta name="theme-color" content="#0f5f68" />
+  <link rel="canonical" href="https://dnxroute.com/whitepaper" />
+  <meta property="og:type" content="article" />
+  <meta property="og:title" content="DNX Whitepaper — Identity-Native Networking over a Name Hierarchy" />
+  <meta property="og:description" content="A working draft describing running code: identity, federation, routing, measurements, and known weaknesses." />
+  <meta property="og:url" content="https://dnxroute.com/whitepaper" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="wrap topbar-inner">
+      <div>
+        <div class="kicker"><a href="/">DNXRoute</a></div>
+        <div class="muted">Whitepaper</div>
+      </div>
+      <nav class="nav">
+        <a href="/learn">Learn</a>
+        <a href="/whitepaper">Whitepaper</a>
+        <a href="/protocol">Protocol</a>
+        <a href="/registry">Registry</a>
+        <a href="/compare">Compare</a>
+        <a href="/journal">Journal</a>
+        <a href="/playground">Playground</a>
+        <a href="https://github.com/Xbitium/DNX">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <div class="wrap doc">
+    <aside class="toc">
+      <div class="toc-title">Contents</div>
+      <a href="#abstract">Abstract</a>
+      <a href="#1-motivation">1. Motivation</a>
+      <a href="#2-goals-and-non-goals">2. Goals and non-goals</a>
+      <a href="#3-identity">3. Identity</a>
+      <a href="#4-the-registry">4. The registry</a>
+      <a href="#5-nat-traversal-implemented">5. NAT traversal (implemented)</a>
+      <a href="#6-session-layer-implemented">6. Session layer (implemented)</a>
+      <a href="#7-stream-layer-implemented">7. Stream layer (implemented)</a>
+      <a href="#8-routing">8. Routing</a>
+      <a href="#9-wire-formats">9. Wire formats</a>
+      <a href="#10-security-analysis">10. Security analysis</a>
+      <a href="#11-implementation-and-deployment">11. Implementation and deployment</a>
+      <a href="#12-related-work">12. Related work</a>
+      <a href="#13-limitations-and-future-work">13. Limitations and future work</a>
+      <a href="#14-conclusion">14. Conclusion</a>
+    </aside>
+    <main class="prose">
+      <p class="eyebrow">Working draft · version 0.4 · July 2026</p>
+      <h1 style="font-family:Archivo,sans-serif;font-size:clamp(2rem,5vw,3.1rem);line-height:1.08;letter-spacing:-.02em;margin:.2rem 0 .6rem">Identity-Native Networking over a Name Hierarchy</h1>
+      <p class="lead">A working draft describing running code. <a href="https://github.com/Xbitium/DNX/blob/main/docs/dnx-whitepaper.md">Source on GitHub</a>.</p>
+<p><strong>A working draft describing running code</strong></p>
+<p>Version 0.4 · July 2026 · <a href="https://dnxroute.com">dnxroute.com</a> · <a href="https://github.com/Xbitium/DNX">github.com/Xbitium/DNX</a></p>
+<h2 id="abstract">Abstract</h2>
+<p>DNX is an experimental network protocol in which a fully-qualified domain name is simultaneously an identity, a routing destination, and a unit of delegated authority. A machine registers a name bound to an ed25519 keypair; resolution returns that key alongside a live endpoint; sessions are encrypted with keys derived from a handshake the key authenticates; and packets are forwarded by walking the name's own hierarchy, one level per hop.</p>
+<p>The claim is deliberately narrow. DNX does not replace IP forwarding — its packets travel as UDP datagrams over existing infrastructure. What it replaces is the <em>aggregation key</em>: where IP derives routability from numeric prefixes assigned by allocation policy, DNX derives it from a namespace hierarchy that already exists for administrative reasons. Geography that IP delivers by accident of allocation, DNX delivers by construction.</p>
+<p>Everything described here as implemented is running. A registry, two node agents and a router daemon are deployed across two datacenters; encrypted sessions carry TCP traffic including SSH; and a public demonstration forwards packets by name across the open internet. Sections are marked to distinguish what runs from what is specified but unbuilt, and a security analysis enumerates the protocol's known weaknesses, including one that was discovered during this work and is described in full.</p>
+<h2 id="1-motivation">1. Motivation</h2>
+<h3 id="1-1-the-internet-is-largely-made-of-compensations">1.1 The Internet is largely made of compensations</h3>
+<p>Almost every layer added to networking since the 1980s exists to recover something the network itself does not know.</p>
+<p>Network address translation exists because addresses ran out. Virtual private networks exist substantially because NAT destroyed inbound reachability. Transport Layer Security exists because an address proves nothing about who answered it. The Domain Name System exists because numbers are unusable by people. Dynamic DNS exists because addresses move. Relay and rendezvous services exist because two machines behind NAT cannot find each other.</p>
+<p>Each of these works. Together they mean that a modern connection is a stack of compensations, and after all of them the network still cannot answer the simplest question anyone asks of it: <em>who is this?</em></p>
+<h3 id="1-2-what-ip-got-right">1.2 What IP got right</h3>
+<p>Any proposal in this space must first respect why the incumbent works.</p>
+<p>IP scales to billions of endpoints because of hierarchical numeric aggregation. A backbone router does not store a route to every host; it stores a route to a prefix and forwards everything inside that block the same direction. Prefixes nest, so a small number of forwarding entries covers an enormous address space, and the match is fixed-width and implementable in dedicated silicon.</p>
+<p><strong>Aggregation is not an optimisation. It is the load-bearing wall.</strong> A routing scheme without it needs a forwarding entry per destination, which does not survive contact with a network of any size. This is the bar.</p>
+<h3 id="1-3-what-names-already-have">1.3 What names already have</h3>
+<p>Names are hierarchical, and that hierarchy already reflects organisational reality: <code>host.team.division.company</code> describes a tree that exists whether or not the network uses it. DNS uses this structure for <em>delegation</em> — deciding who may answer — and then discards it: the moment a name becomes an address, every router afterwards sees only numbers.</p>
+<p>DNX asks what happens if the name keeps mattering all the way down.</p>
+<h3 id="1-4-thesis">1.4 Thesis</h3>
+<div class="callout"><p>Replace the aggregation key. Keep hierarchy; change its alphabet from numeric prefixes to name levels. Bind identity into the address rather than layering it above.</p></div>
+<h2 id="2-goals-and-non-goals">2. Goals and non-goals</h2>
+<p><strong>Goals.</strong></p>
+<ol><li>Names are the only addresses humans or applications handle.</li><li>Identity is native to the addressing layer: reaching a name and verifying its owner are the same operation.</li><li>A machine behind an unconfigured NAT is as reachable as a public server.</li><li>Records are fresh within seconds, not cache lifetimes.</li><li>Authority is delegable, so no single party controls the namespace.</li><li>Deployment is incremental; nothing requires a flag day.</li></ol>
+<p><strong>Non-goals.</strong></p>
+<p>DNX does not replace IP forwarding. Packets are UDP datagrams moved by existing routers. Name-native forwarding in hardware is a target architecture, not a current claim, and section 11 is explicit about what that would require.</p>
+<p>DNX is not an anonymity system. It conceals payloads, not relationships; a registry observes who resolves whom. Where anonymity is the requirement, Tor is the correct tool and DNX is the wrong one.</p>
+<p>DNX is not production software. It is an unaudited research prototype with a wire format that will change.</p>
+<h2 id="3-identity">3. Identity</h2>
+<h3 id="3-1-the-key-is-the-machine">3.1 The key is the machine</h3>
+<p>On first boot a node generates an ed25519 keypair. The keypair is the machine's identity; the domain name is a human-readable handle bound to it. The private key is stored locally, mode 0600, and never transmitted — only public keys and signatures cross the wire.</p>
+<p>A name binds to a key first-come-first-served. A registration for an already-bound name under a different key is rejected regardless of signature validity: possession of a name requires possession of its key.</p>
+<h3 id="3-2-ownership-is-not-liveness-implemented">3.2 Ownership is not liveness <em>(implemented)</em></h3>
+<p>Two lifetimes run independently, and conflating them produced a real vulnerability during development.</p>
+<p>An <strong>endpoint</strong> expires 60 seconds after the last heartbeat, so nobody is directed to a machine that has moved or gone away. A <strong>name-to-key binding</strong> persists for a year and is then retired deliberately.</p>
+<p>An earlier implementation deleted the whole record after ten minutes of silence. The consequence was that switching a machine off for long enough handed its name to whoever registered next, and the rightful owner was subsequently refused its own name. Ownership had become a function of uptime. Bindings are now persisted to disk with an atomic write, so they survive a process restart as well; without that, deploying the first fix would itself have un-owned every name in existence.</p>
+<h3 id="3-3-transfer-and-release-implemented">3.3 Transfer and release <em>(implemented)</em></h3>
+<p>Two mechanisms, split by what cryptography can prove.</p>
+<p><strong>Rotation</strong> is a protocol feature. A <code>REBIND</code> message signed by the <em>current</em> key transfers a name to a new one. Its signature covers the destination key, not merely the name — a signature saying "move this name" without saying where would let anyone observing one legitimate transfer replay it to install a key of their own.</p>
+<p><strong>Recovery from a lost key is not a protocol feature.</strong> If an owner cannot sign, nothing distinguishes them from an impostor making the same claim. Releasing a name is therefore an operator action requiring shell access to the registry host, and is deliberately unreachable over the network.</p>
+<h2 id="4-the-registry">4. The registry</h2>
+<h3 id="4-1-three-jobs">4.1 Three jobs</h3>
+<p>Calling it "the registry" obscures that one service currently performs three functions with unrelated trust, scale and freshness characteristics:</p>
+<table class="spec"><thead><tr><th>Job</th><th>Answers</th><th>Changes</th><th>Analogue</th></tr></thead><tbody><tr><td>Naming authority</td><td>who owns this name?</td><td>almost never</td><td>a domain registrar</td></tr><tr><td>Location directory</td><td>where is it now?</td><td>constantly</td><td>an ARP table</td></tr><tr><td>Rendezvous broker</td><td>introduce these peers</td><td>per connection</td><td>STUN / signalling</td></tr></tbody></table>
+<p>The first is an authority question and must be answered consistently. The second is soft state that expires by itself. The third holds nothing. In a mature deployment these are three services, possibly operated by three parties.</p>
+<p>The location directory is genuinely ARP-shaped: soft state about liveness, refreshed by activity, expiring on silence. The decisive difference is that ARP has no concept of ownership — whoever answers is believed, which is precisely why ARP spoofing works. A DNX name is bound to a key, so answering is not enough; you have to sign.</p>
+<p>Routers never consult the registry to forward a packet. It is control plane, not data plane.</p>
+<h3 id="4-2-the-endpoint-is-observed-not-asserted">4.2 The endpoint is observed, not asserted</h3>
+<p>A node never states where it is. The registry records the source address it observed on the datagram, and that field is deliberately excluded from the node's signature. A node therefore cannot lie about its location, because it never claims one. For a NAT'd machine the observed address is the router's public mapping, and the same heartbeat that reports presence keeps that mapping alive.</p>
+<h3 id="4-3-signed-answers-implemented">4.3 Signed answers <em>(implemented)</em></h3>
+<p>A resolution answer carries the peer's public key, and the asking node has no other source for it. The handshake is then checked against exactly that key.</p>
+<p>This is circular unless the answer itself is authenticated, and until it was, an on-path attacker forging a single UDP packet could supply a key it controlled, complete a valid handshake, and be reported as verified. Section 10.1 describes the discovery in full because the reasoning matters more than the fix.</p>
+<p>The registry now holds a persisted keypair and signs answers over the target name, the peer's key and the endpoint — the three fields an attacker would forge. A node configured with the registry's public key refuses any answer it cannot verify.</p>
+<h3 id="4-4-federation-implemented-not-yet-publicly-deployed">4.4 Federation <em>(implemented, not yet publicly deployed)</em></h3>
+<p>The unit of authority is a <strong>zone</strong>. A registry is authoritative for a zone and may delegate branches to other registries; a resolver follows referrals until it reaches an authoritative answer. This is DNS's delegation model, with one addition: because DNX records carry keys, a referral can be signed, so the whole chain is verifiable rather than trusted hop by hop.</p>
+<p>A referral is a transfer of trust, and three conditions are enforced:</p>
+<ol><li><strong>It is signed</strong> by the registry currently trusted. <code>ReferralBytes</code> covers the child's address <em>and</em> its key, because a referral naming only a zone would let a captured one point a resolver at any registry — the same substitution attack as a forged answer, one level up, and worse, since it hands over a branch rather than a name.</li><li><strong>The delegated zone contains the name asked about</strong>, or the referral is simply misdirection.</li><li><strong>Each hop narrows.</strong> A registry given <code>eng.example.com</code> cannot refer for <code>example.com</code>, a sibling, or anything unrelated. Without this, delegating a small part of a namespace would be a route to seizing all of it.</li></ol>
+<p>Containment is compared label-wise. A plain suffix test reports that <code>evil-example.com</code> ends with <code>example.com</code>, which would hand authority to whoever registered a similar-looking name. Delegations are also validated at startup, so a misconfiguration is a boot failure rather than a hole nobody notices.</p>
+<h3 id="4-5-the-caching-tension">4.5 The caching tension</h3>
+<p>Records are fresh within seconds only because every resolution reaches the authoritative registry. Introducing caching for scale reintroduces the staleness DNX criticises DNS for.</p>
+<p>The resolution is that the two halves of a record have opposite profiles. A <strong>name-to-key binding</strong> is stable, self-verifying, and safely cached for days. A <strong>name-to-endpoint mapping</strong> is volatile and should be cached briefly or not at all. Splitting the record splits the problem — and reinforces the argument that the naming authority and the location directory want to be separate services.</p>
+<h2 id="5-nat-traversal-implemented">5. NAT traversal <em>(implemented)</em></h2>
+<p>NATs were never blocking inbound traffic; they were blocking <em>unexpected</em> inbound traffic. DNX makes every connection expected at both ends simultaneously.</p>
+<p>A node asks the registry to introduce it to a peer. The registry forwards a cue to the peer's last observed endpoint — reachable because the peer's own heartbeats keep that path warm — and both nodes then fire datagrams at each other. Each outbound packet installs a mapping in its own NAT permitting the other side's inbound traffic. The walls open from the inside.</p>
+<p>Consequently a node needs <strong>no inbound firewall rules at all</strong>. In the live deployment one host permits only SSH inbound and is still fully reachable by name.</p>
+<p>This succeeds against full-cone and port-restricted NATs. <strong>Symmetric NATs</strong>, which allocate a fresh mapping per destination, defeat it; relayed fallback is specified but not built, and peers behind such a NAT currently cannot connect.</p>
+<h2 id="6-session-layer-implemented">6. Session layer <em>(implemented)</em></h2>
+<p>Two messages, approximately one round trip:</p>
+<pre class="code"><code>A → B   HS_INIT  { ephA_pub, nonce_A, ts, sig_A }      signed by A&#x27;s ed25519
+A ← B   HS_RESP  { ephB_pub, nonce_A, nonce_B, sig_B } signed by B&#x27;s ed25519
+
+both:   shared = X25519(eph_priv, peer_eph_pub)
+        keys   = HKDF-SHA256(shared, salt = nonce_A ‖ nonce_B, info = direction)</code></pre>
+<p>The long-term identity key signs the ephemeral key. Since the registry binds that identity key to a name, the session key is provably owned by whoever owns the name: <strong>encryption inherits name-identity, and nothing new has to be trusted.</strong> The registry never sees a session key.</p>
+<p>Echoing <code>nonce_A</code> binds the response to that exact handshake. Each side derives directional keys, so the two flows never share a nonce space.</p>
+<p>Ephemeral keys are discarded on rekey every five minutes, so compromising a machine's long-term key tomorrow does not decrypt traffic captured today.</p>
+<p>Traffic is sealed with ChaCha20-Poly1305. The frame header carries a monotonic counter that doubles as the AEAD nonce and is authenticated as additional data; a counter is accepted at most once, and recorded only after the tag verifies, so forged frames cannot poison the replay table.</p>
+<p><strong>Design rule.</strong> The protocol is ours; the mathematics is not. X25519, ChaCha20-Poly1305, HKDF and ed25519 come from audited implementations. The novel work is the state machine and how it inherits name-to-key trust — and that is where the tests are aimed: impersonation with the wrong key, single-bit tampering, replay, counter reuse across a thousand frames, and decryption by a foreign session.</p>
+<h2 id="7-stream-layer-implemented">7. Stream layer <em>(implemented)</em></h2>
+<p>DNX must run on UDP for NAT traversal, so something has to restore reliable ordered delivery. The stream layer is deliberately TCP-shaped, because TCP's shape is correct: byte-offset sequence numbers so segment boundaries may change on retransmit, cumulative acknowledgement, RTO estimation from smoothed round-trip time and variance with exponential backoff, a receiver-advertised window, and slow start with multiplicative decrease on loss. Round-trip samples are taken only from segments never retransmitted, since a retransmitted segment's timing is ambiguous.</p>
+<p><strong>Deliberately omitted:</strong> selective acknowledgement, fast retransmit on duplicate acknowledgements, path MTU discovery, and window scaling. Loss recovery is timeout-driven — correct, but slower than TCP on lossy paths.</p>
+<h3 id="7-1-the-zero-window-deadlock">7.1 The zero-window deadlock</h3>
+<p>One behaviour is worth describing because it is invisible until provoked.</p>
+<p>When a receiver's buffer fills, it advertises a zero window and the sender parks. When the application finally reads, the receiver sends an acknowledgement announcing the reopened window. <strong>If that acknowledgement is lost, both sides wait forever</strong> — the receiver believes it announced space, the sender is waiting to be told.</p>
+<p>A test written specifically to provoke that sequence deadlocked exactly as feared. The fix is TCP's persist timer: probe a closed window periodically so that any reply carries the current state. It was verified by disabling the probe and confirming the test fails, then re-enabling it.</p>
+<h3 id="7-2-tunnels-implemented">7.2 Tunnels <em>(implemented)</em></h3>
+<p><code>dnx tunnel host.example.com 2222:22</code> opens a local TCP listener whose bytes travel as stream frames inside the sealed session. Multiple tunnels are multiplexed over one session by stream identifier. This has carried HTTP and SSH in the live deployment.</p>
+<p>Inbound tunnels are gated by an explicit <strong>port allowlist</strong>, and the design of that flag matters. A boolean "tunnels enabled" switch published every service bound to loopback — an administrative API, a database, a metrics endpoint never meant to leave the machine — because the responder dials whatever port the peer names. <code>--tunnel-ports 22</code> names what may be reached and refuses everything else. A node given no ports refuses all inbound tunnels, so the flag fails closed and upgrading without it changes no exposure.</p>
+<h2 id="8-routing">8. Routing</h2>
+<h3 id="8-1-forwarding-by-name-level">8.1 Forwarding by name level</h3>
+<p>Each router holds a table keyed by the single level of the destination it is responsible for, mapping that level's value to a next hop. It reads that one level, forwards, and never looks lower.</p>
+<pre class="code"><code>forward(packet):
+    level = the level this router owns
+    hop   = table.lookup(destination.at(level))
+    if hop is LOCAL:   deliver
+    elif hop exists:   mark level resolved; send to hop
+    else:              no route — drop, definitively</code></pre>
+<p><strong>Authoritative failure matters.</strong> A router responsible for a level is authoritative for its children: if it has no route, nothing closer to the root knows better, so the packet is dropped there. An earlier design forwarded unmatched packets toward the root on the theory that something higher would know more. It does not, and the result oscillated between two routers until a hop limit killed it. "Send it upward and let someone smarter decide" is not a routing policy; it is a loop with extra steps.</p>
+<h3 id="8-2-why-this-aggregates">8.2 Why this aggregates</h3>
+<p>Let the network hold <em>H</em> hosts in a tree of branching factor <em>b</em>. A router's forwarding table size is the number of distinct children it must distinguish — <em>b</em> entries — <strong>independent of H</strong>. A core router holds one entry per top-level namespace and forwards all <em>H</em> hosts through them.</p>
+<p>Table growth at the core as hosts are added is <strong>zero</strong>: new hosts appear as leaves beneath levels the core already knows. This is checked rather than asserted — in test, a core table holds two entries after 1001 hosts are added across two top-level namespaces.</p>
+<p>Compare IP, where core tables grow with the number of <em>allocated prefixes</em>, today around a million and climbing, because allocation fragments and prefixes deaggregate. DNX table size is bounded by the designed branching factor of each level, not by allocation history.</p>
+<div class="callout"><p><strong>Result.</strong> Forwarding-table size at any router is O(children-of-that-router), not O(hosts) and not O(allocated-prefixes). The core is constant in the number of hosts.</p></div>
+<h3 id="8-3-the-cost-stated-plainly">8.3 The cost, stated plainly</h3>
+<p>Matching a variable-length level is more expensive per lookup than a fixed-width numeric prefix match in dedicated silicon. DNX trades a harder per-hop lookup for smaller tables and human-meaningful routing.</p>
+<p>The strongest evidence that this is implementable is MPLS, which has forwarded variable-depth label stacks in hardware at line rate, in essentially every large carrier network, for two decades. "Variable-depth stack of small identifiers, each hop reading only the top one" describes MPLS and DNX equally well.</p>
+<p>That comparison also imposes an obligation: <strong>how is DNX different from MPLS?</strong> MPLS labels are locally significant, signalled per path, and carry no identity — they mean nothing outside the router pair that agreed on them. DNX identifiers are derived from a namespace that means something everywhere and are bound to keys. MPLS is a forwarding optimisation beneath IP; DNX changes what is being forwarded on.</p>
+<h3 id="8-4-namespace-paths-implemented-both-formats-run-side-by-side">8.4 Namespace paths <em>(implemented; both formats run side by side)</em></h3>
+<p>The original address was four fixed 64-bit fields. That capped hierarchy at four levels and failed on the first realistic organisation chart — <code>api.production.us-east.customer.company</code> is five.</p>
+<p>A destination is now an ordered sequence of numeric identifiers with an explicit count:</p>
+<pre class="code"><code>+---------+--------+--------+     +----------+
+| count   | NID[0] | NID[1] | ... | NID[n-1] |
+| 1 byte  | 4 bytes| 4 bytes|     | 4 bytes  |
++---------+--------+--------+     +----------+</code></pre>
+<p><strong>Identifiers are parent-scoped</strong> — unique among siblings, not globally. This is safe because forwarding is top-down: a router at level <em>k</em> only ever sees packets whose levels 0…<em>k</em>−1 have already matched, so the parent context is guaranteed. It keeps identifiers dense, and it removes a governance objection: each namespace allocates its own without asking a central authority for numbers.</p>
+<p>The cost is that an identifier means nothing alone, which makes a misrouted packet unreadable. Reverse resolution therefore exists, translating a path back to the name it was addressed to and refusing to guess at identifiers that were never allocated.</p>
+<p><strong>Identifiers are never reused.</strong> Reuse is the obvious way to keep them dense and is a trap: a packet in flight, or a stale forwarding entry, would be delivered to whatever inherited the number. Monotonic allocation is simpler than generation counters and costs nothing at four billion allocations per parent.</p>
+<p>Decoding is strict — a truncated or over-deep path is refused rather than half-interpreted, because guessing at a destination is how a packet ends up somewhere nobody intended. Depth is capped at sixteen.</p>
+<p>The common case is also <em>smaller</em> than what it replaces: 17 bytes at four levels against a fixed 32, and 33 bytes at eight levels, a depth the old format could not express at all.</p>
+<p>Both formats currently run side by side under distinct frame markers, sharing one forwarding walk — only the lookup key and table differ. This is what makes the migration gradual rather than a flag day.</p>
+<h2 id="9-wire-formats">9. Wire formats</h2>
+<p>Four formats share one UDP socket, distinguished by their first byte, which is what allows old and new to coexist during migration.</p>
+<table class="spec"><thead><tr><th>First byte</th><th>Contents</th></tr></thead><tbody><tr><td><code>{</code></td><td>JSON control message — registration, resolution, handshake</td></tr><tr><td><code>0xD8</code></td><td>Sealed frame — ChaCha20-Poly1305</td></tr><tr><td><code>0xDF</code></td><td>Routed frame, fixed four-field address</td></tr><tr><td><code>0xDE</code></td><td>Routed frame, variable-length namespace path</td></tr></tbody></table>
+<p>A control message carries the sender's name, its public key, a millisecond timestamp enforced within ±30 seconds, a 96-bit nonce, and an ed25519 signature. The registry-observed endpoint is present but deliberately outside the signed bytes.</p>
+<p>A routed frame carries the destination, a count of levels already resolved so the next router knows where to continue, and a payload that is itself a sealed frame. <strong>Routers forward what they cannot read.</strong></p>
+<h2 id="10-security-analysis">10. Security analysis</h2>
+<h3 id="10-1-the-impersonation-hole">10.1 The impersonation hole</h3>
+<p>This is described at length because the reasoning generalises.</p>
+<p>An early version of this documentation asserted that forging a resolution answer permitted denial of service but not impersonation, on the grounds that a poisoned endpoint could not produce replies verifying against the genuine key.</p>
+<p><strong>That was wrong.</strong> It assumed an attacker would forge only the endpoint. A resolution answer carries the peer's public key as well, and the asking node has no independent knowledge of it — the handshake is checked against exactly the key the registry just supplied. An on-path attacker forging one UDP packet could therefore name a key it held, complete a valid handshake, and be reported as <code>identity_verified=true</code> for a machine that did not own the name.</p>
+<p>Every identity guarantee in the protocol rested on one unauthenticated message. The fix is section 4.3.</p>
+<p>The generalisable lesson concerns what a signature covers. The ordinary message signature omits the key field, which is <em>correct</em> for registration — the key is self-asserted and signing with it proves possession — and would have been <em>catastrophic</em> if reused for a transfer or a referral, where the key is precisely what an attacker would substitute. The same omission is harmless in one message and fatal in another. Both <code>RebindBytes</code> and <code>ReferralBytes</code> therefore define their own signing strings, and each is verified by a test that removes the critical field and confirms the attack succeeds without it.</p>
+<h3 id="10-2-what-a-verified-reply-proves">10.2 What a verified reply proves</h3>
+<p>That the responder holds the private key the registry associates with that name, and — where the registry's own key is configured — that the answer naming that key was authentic. It does not prove anything about the peer's intentions.</p>
+<h3 id="10-3-known-weaknesses">10.3 Known weaknesses</h3>
+<table class="spec"><thead><tr><th>Weakness</th><th>Consequence</th></tr></thead><tbody><tr><td><strong>Symmetric NAT</strong></td><td>Simple hole punching fails; those peers are unreachable. Relayed fallback is specified, not built.</td></tr><tr><td><strong>No registry replication</strong></td><td>Federation splits authority, but each zone is still a single machine. Its loss halts <em>new</em> resolution and rendezvous; established sessions continue.</td></tr><tr><td><strong>Metadata exposure</strong></td><td>A registry observes who resolves whom. Delegation narrows each registry's view to its own zone but does not eliminate this.</td></tr><tr><td><strong>No ownership proof</strong></td><td>Nothing ties a DNX name to actual control of the corresponding domain, so any unclaimed name may be registered by anyone.</td></tr><tr><td><strong>No homograph policy</strong></td><td>Visually identical names built from different scripts are distinct names.</td></tr><tr><td><strong>Identity key loss</strong></td><td>A node that loses its key is refused its own name until an operator releases it. There is no backup mechanism.</td></tr><tr><td><strong>Unaudited</strong></td><td>The implementation has had no external review.</td></tr></tbody></table>
+<p>This list is published because a protocol that conceals its weaknesses cannot be evaluated. If a reader finds one absent from it, that is a defect in this document.</p>
+<h2 id="11-implementation-and-deployment">11. Implementation and deployment</h2>
+<p>About 5,000 lines of Go across eight library packages, plus 2,100 lines of tests — 75 test functions, concentrated where the consequences of being wrong are worst: 30 in the registry, 13 in namespace paths, 12 in the stream layer, 7 in the session layer. Three binaries — registry, node agent, router daemon — plus a command-line client.</p>
+<p>Three packages carry no tests of their own: <code>identity</code> and <code>proto</code> are exercised throughout the others, and <code>locator</code> is superseded by <code>nspath</code> and retained only for reference.</p>
+<p><strong>Deployed:</strong> a registry with signed answers and persisted ownership; node agents on two hosts in separate datacenters, both verifying registry answers; encrypted sessions; NAT traversal; TCP tunnelling behind a port allowlist; and a public routing demonstration.</p>
+<p><strong>Built, not yet deployed:</strong> federation, namespace paths, and the tunnel setup probe.</p>
+<h3 id="11-1-measurements">11.1 Measurements</h3>
+<p>All from the live deployment or its test suite; none are extrapolated.</p>
+<table class="spec"><thead><tr><th>Measurement</th><th>Value</th></tr></thead><tbody><tr><td>Encrypted ping, cold (includes handshake, cross-datacenter)</td><td>~405 ms</td></tr><tr><td>Encrypted ping, warm (session reused)</td><td>~1 ms</td></tr><tr><td>Cloud → residential NAT, first packet (includes traversal)</td><td>396 ms</td></tr><tr><td>Same path, established</td><td>49 ms</td></tr><tr><td>Session handshake, same host</td><td>~2 ms</td></tr><tr><td>Router lookup, single process</td><td>0.03 – 1.5 µs</td></tr><tr><td>Core table after 1001 hosts, two top-level namespaces</td><td>2 entries</td></tr><tr><td>Destination on the wire, four levels</td><td>17 bytes (vs 32 fixed)</td></tr><tr><td>Stream integrity under 20% induced packet loss</td><td>no loss, no reordering</td></tr></tbody></table>
+<h3 id="11-2-method">11.2 Method</h3>
+<p>Seven substantive defects were found during development, each by asking what happens in a case nobody had tested, and each fix verified by first watching its test fail:</p>
+<ol><li>A routing loop from forwarding unmatched packets toward the root.</li><li>A zero-window deadlock when a window update is lost.</li><li>Name hijack: ownership expiring with liveness after ten minutes.</li><li>Namespace wipe: ownership held only in memory, lost on restart.</li><li>A three-label name copying its host label into its subdomain field.</li><li>Impersonation via unsigned resolution answers (section 10.1).</li><li><code>dnx tunnel</code> reporting success for a tunnel the far end would refuse.</li></ol>
+<p>Two are worth noting for how they were found. The subdomain defect surfaced because a second implementation, written in JavaScript for a browser playground, disagreed with the first — and the first was wrong. The impersonation hole surfaced from re-reading a security claim in this project's own documentation while preparing to build federation.</p>
+<h2 id="12-related-work">12. Related work</h2>
+<p>DNX is not the first name-oriented network and should be read as a descendant of this literature rather than a rival to it.</p>
+<p><strong>Named Data Networking / CCN</strong> is the most serious existing attempt at name-based forwarding, with name-based forwarding tables and research since roughly 2009. NDN routes on <em>content</em> names toward data, pull-style; DNX routes on <em>endpoint</em> names toward hosts, preserving a host-to-host model. That makes DNX far less ambitious and considerably easier to deploy incrementally. The literature on making name-based forwarding tables fast is NDN's, and DNX borrows from it.</p>
+<p><strong>ILNP, LISP and HIP</strong> all separate identity from location, which is the same instinct. They keep locators numeric and add a mapping layer; DNX makes the locator a routable name hierarchy, so the thing routed on is the thing a human reads. HIP is the closest relative on identity; DNX's contribution is fusing that cryptographic identity to a locator that aggregates.</p>
+<p><strong>MPLS</strong> is the evidence that the forwarding model is implementable at line rate (section 8.3).</p>
+<p><strong>WireGuard</strong> supplies the identity model DNX's session layer borrows — "the keypair is the machine" is WireGuard's insight — but has no naming or routing story; peers are configured with keys and endpoints by hand.</p>
+<p><strong>Tailscale and ZeroTier</strong> deserve the most attention from anyone evaluating DNX, because much of what DNX demonstrates today they do in production. The difference is structural: they are flat meshes whose coordinator knows every node, and that knowledge grows with the number of machines. DNX's claim is about hierarchy — a core table that does not grow as hosts are added beneath it. Whether that matters depends on whether an overlay should scale like the Internet or like a company network.</p>
+<p><strong>SCION</strong> reorganises inter-domain routing while keeping addresses roughly as they are; DNX reorganises the address and lets the hierarchy route. They attack different halves of the same discomfort, and SCION is vastly more mature.</p>
+<p><strong>DNS + IP</strong> remains the incumbent, and its delegation model is what DNX's federation imitates.</p>
+<h2 id="13-limitations-and-future-work">13. Limitations and future work</h2>
+<p><strong>Nearest term.</strong> Deploy federation publicly; complete the migration to namespace paths and retire the fixed address; build relayed fallback so peers behind symmetric NATs can connect.</p>
+<p><strong>Then.</strong> Registry replication, so a zone is not a single machine. A backup and recovery story for node identity keys. Ownership proofs binding a DNX name to demonstrated control of the corresponding domain. Selective acknowledgement and fast retransmit in the stream layer.</p>
+<p><strong>Research.</strong> Pushing name-based forwarding down the stack, so routers decide on names natively rather than over an IP substrate. This is a direction, not a schedule, and the honest position is that the overlay is not a compromise on the way there — it is how such things get deployed. IP itself first ran over the telephone network, and nobody ever removed the copper; it simply stopped being what anyone thought about.</p>
+<h2 id="14-conclusion">14. Conclusion</h2>
+<p>DNX tests a narrow hypothesis: that the aggregation key can be replaced, that identity belongs in the address rather than above it, and that both can be deployed incrementally over the network that already exists.</p>
+<p>The hypothesis is not proven. What exists is a working prototype, a public deployment, a set of measurements, and a candid list of what remains broken. That is offered not as a finished argument but as something concrete enough to disagree with — which is the only useful thing an experimental protocol can be.</p>
+<p><em>Every implemented claim corresponds to running code. Where this document and the code disagree, the code is the bug. Corrections and objections are welcome at <a href="https://github.com/Xbitium/DNX">github.com/Xbitium/DNX</a>.</em></p>
+    </main>
+  </div>
+
+  <nav class="footer-nav" aria-label="All pages">
+    <div>
+      <h4>Understand</h4>
+      <a href="/whitepaper">Whitepaper</a>
+      <a href="/learn">Learn networking, then DNX</a>
+      <a href="/protocol">Protocol specification</a>
+      <a href="/registry">The registry &amp; federation</a>
+    </div>
+    <div>
+      <h4>Evaluate</h4>
+      <a href="/compare">Why not DNS, WireGuard, libp2p?</a>
+      <a href="/journal">Engineering journal</a>
+      <a href="/proposals">Proposals (DNXP)</a>
+    </div>
+    <div>
+      <h4>See it work</h4>
+      <a href="/playground">Playground</a>
+      <a href="https://routing.dnxroute.com">Live routing demo</a>
+      <div class="note">A packet crossing two datacenters by name, with telemetry from both.</div>
+      <a href="https://github.com/Xbitium/DNX">Source on GitHub</a>
+    </div>
+  </nav>
+
+
+  <footer class="wrap footer">
+    <span>DNXRoute · Protocol specification</span>
+    <span>Where this document and the code disagree, the code is the bug · <a href="https://github.com/Xbitium/DNX">GitHub</a></span>
+  </footer>
+</body>
+</html>

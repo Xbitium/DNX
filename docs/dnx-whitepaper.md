@@ -555,9 +555,15 @@ document.
 
 ## 11. Implementation and deployment
 
-Approximately 4,000 lines of Go across seven packages, with around sixty
-tests. Three binaries — registry, node agent, router daemon — plus a
-command-line client.
+About 5,000 lines of Go across eight library packages, plus 2,100 lines of
+tests — 75 test functions, concentrated where the consequences of being wrong
+are worst: 30 in the registry, 13 in namespace paths, 12 in the stream layer,
+7 in the session layer. Three binaries — registry, node agent, router
+daemon — plus a command-line client.
+
+Three packages carry no tests of their own: `identity` and `proto` are
+exercised throughout the others, and `locator` is superseded by `nspath` and
+retained only for reference.
 
 **Deployed:** a registry with signed answers and persisted ownership; node
 agents on two hosts in separate datacenters, both verifying registry answers;
