@@ -29,9 +29,12 @@ deployed today:
   64-bit field per hop — the same fixed-width operation IP silicon already
   does, extended to be name-meaningful.
 
-Read [`docs/dnx-routing-concept.md`](docs/dnx-routing-concept.md) for the
-full addressing/routing model, the aggregation analysis, and an honest
-account of what this does and does not claim to replace.
+Read [`docs/dnx-whitepaper.md`](docs/dnx-whitepaper.md) for the full
+protocol: identity, the registry and its federation, NAT traversal, the
+session and stream layers, the routing model with its aggregation analysis,
+measurements from the live deployment, and a candid account of what is
+broken. `docs/dnx-routing-concept.md` is the earlier routing-only draft, kept
+for the record.
 
 ## Repository layout
 

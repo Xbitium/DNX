@@ -4,6 +4,11 @@
 
 **Working draft — v0.3 concept · July 2026 · dnxroute.com**
 
+> **Superseded.** This document described the routing model as it stood before
+> federation, signed registry answers, the stream layer and DNXP-0001 existed.
+> It is kept for the record; the current description of the protocol is
+> [`dnx-whitepaper.md`](dnx-whitepaper.md).
+
 ---
 
 ## Abstract
