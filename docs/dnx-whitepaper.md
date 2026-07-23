@@ -545,6 +545,7 @@ intentions.
 | **No ownership proof** | Nothing ties a DNX name to actual control of the corresponding domain, so any unclaimed name may be registered by anyone. |
 | **No homograph policy** | Visually identical names built from different scripts are distinct names. |
 | **Identity key loss** | A node that loses its key is refused its own name until an operator releases it. There is no backup mechanism. |
+| **Namespace identifiers are not distributed** | Path identifiers are allocated monotonically per parent, so they depend on the order names are seen. Nothing hands them out: every node must be configured with the same names in the same order, and a node that disagrees forwards confidently to the wrong place. The fixed address needed no such agreement, because a hashed label is the same everywhere. |
 | **Unaudited** | The implementation has had no external review. |
 
 This list is published because a protocol that conceals its weaknesses cannot
@@ -570,9 +571,11 @@ agents on two hosts in separate datacenters, both verifying registry answers;
 encrypted sessions; NAT traversal; TCP tunnelling behind a port allowlist;
 a public routing demonstration; and a federated namespace — a root registry
 authoritative for `dnxroute.com` delegating `eng.dnxroute.com` to a second
-registry in another datacenter, with resolvers following the signed referral.
+registry in another datacenter, with resolvers following the signed referral;
+and both wire formats at once — the same four routers forward a 32-byte fixed
+address and a 17-byte namespace path concurrently, with no coordinated cutover.
 
-**Built, not yet deployed:** namespace paths and the tunnel setup probe.
+**Built, not yet deployed:** the tunnel setup probe.
 
 ### 11.1 Measurements
 
@@ -594,7 +597,7 @@ All from the live deployment or its test suite; none are extrapolated.
 
 ### 11.2 Method
 
-Eight substantive defects were found during development, each by asking what
+Nine substantive defects were found during development, each by asking what
 happens in a case nobody had tested, and each fix verified by first watching
 its test fail:
 
@@ -607,6 +610,8 @@ its test fail:
 7. `dnx tunnel` reporting success for a tunnel the far end would refuse.
 8. Rendezvous sent to the configured registry rather than the one a referral
    had made authoritative.
+9. A request for one wire format answered in another, and reported as
+   success, by a daemon too old to know the format existed.
 
 Three are worth noting for how they were found. The subdomain defect surfaced
 because a second implementation, written in JavaScript for a browser
@@ -644,6 +649,8 @@ moments later against the same peer, it verified in 49 ms. The control that
 makes this conclusive ran on the pre-fix binary too: a peer in a
 non-delegated zone answered normally throughout, so what failed was not the
 node but specifically the combination of delegation and NAT.
+
+The ninth is defect seven wearing different clothes, and it was found by deploying rather than by reading. A request to originate a packet as a namespace path was answered, by a router daemon predating that format, with a fixed address and a success reply — the format field it did not recognise simply fell through to the default. Nothing was wrong with the running system; it was doing what an older binary should do with a field it has never heard of. What was wrong was reporting that as the thing requested. Version skew is the ordinary condition of a network protocol, not an exceptional one, so an unrecognised format is now refused by name.
 
 ---
 
@@ -693,9 +700,14 @@ federation imitates.
 
 ## 13. Limitations and future work
 
-**Nearest term.** Complete the migration to namespace paths and retire the
-fixed address; build relayed fallback so peers behind symmetric NATs can
-connect; give a registry asked for a name outside its zone an explicit
+**Nearest term.** Make the registry allocate and publish namespace
+identifiers, which is the one thing still standing between the two wire
+formats and retiring the fixed address: the hierarchy a registry already
+delegates is exactly the hierarchy the identifiers are scoped to, so a child
+zone can number beneath itself without asking anyone. Until it does, the
+identifiers are hand-assigned in matching config order and the old format
+has to stay. Then build relayed fallback so peers behind symmetric NATs can
+connect; and give a registry asked for a name outside its zone an explicit
 answer, since it currently stays silent and the resolver reports a timeout
 that reads as though the registry were unreachable.
 

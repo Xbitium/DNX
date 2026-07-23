@@ -418,6 +418,19 @@ func (d *daemon) serveTelemetry(listen string) {
 		// A fake sealed payload (0xD8) — routers never open it.
 		payload := append([]byte{0xD8}, []byte("sealed-demo-payload")...)
 
+		// An unrecognised format used to fall through to the fixed address,
+		// so a typo — or a caller talking to a daemon too old to know about
+		// namespace paths — silently got a 32-byte frame and a success
+		// reply. That is defect 7's lesson in a different costume: never
+		// report success for something other than what was asked for.
+		switch body.Format {
+		case "", "fixed", "path":
+		default:
+			writeJSON(w, map[string]any{
+				"error": fmt.Sprintf("unknown format %q: use \"fixed\" or \"path\"", body.Format)})
+			return
+		}
+
 		if body.Format == "path" {
 			p, err := d.ns.Resolve(body.Name)
 			if err != nil {

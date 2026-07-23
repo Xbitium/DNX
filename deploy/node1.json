@@ -2,14 +2,21 @@
   "node": "dnxroute1",
   "routers": [
     { "name": "core", "depth": 0,
-      "entries": { "0x0000000100000000": "dom-dnxroute", "0x0000000200000000": "gov-core" } },
+      "entries": { "0x0000000100000000": "dom-dnxroute", "0x0000000200000000": "gov-core" },
+      "nids": { "1": "dom-dnxroute", "2": "gov-core" } },
     { "name": "dnxroute-gw", "depth": 1,
-      "entries": { "0x0000000000001001": "sub-dnx" } }
+      "entries": { "0x0000000000001001": "sub-dnx" },
+      "nids": { "1": "sub-dnx" } }
   ],
   "hops": {
     "dom-dnxroute": ":localnext",
     "gov-core": ":deliver",
     "sub-dnx": "134.122.7.99:4500"
   },
-  "firsthop": "core"
+  "firsthop": "core",
+  "namespace": [
+    "host1.dnx.dnxroute.com",
+    "host2.dnx.dnxroute.com",
+    "core.gov"
+  ]
 }
