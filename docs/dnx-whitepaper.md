@@ -575,11 +575,13 @@ registry in another datacenter, with resolvers following the signed referral;
 and both wire formats at once — the same four routers forward a 32-byte fixed
 address and a 17-byte namespace path concurrently, with no coordinated cutover.
 
-**Built, not yet deployed:** the tunnel setup probe; and the registry as
-namespace-identifier authority — allocation on registration, persisted
-with the same care as ownership, published under signature both per-answer
-and as a fetchable table (the production routers still derive from
-configuration order until the next deployment).
+**Built, not yet deployed:** the tunnel setup probe; and the routers'
+fetch-from-registry mode — the registry authority itself is live (both
+production registries allocate, persist, and publish, and a resolve
+through the referral chain returns the child-allocated path verified),
+but the public routing demonstration still derives its identifiers from
+configuration order, because the names it routes are synthetic: no node
+registers them, so no authority allocates them.
 
 ### 11.1 Measurements
 
