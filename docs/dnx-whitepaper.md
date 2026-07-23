@@ -211,7 +211,7 @@ name, the peer's key and the endpoint — the three fields an attacker would
 forge. A node configured with the registry's public key refuses any answer it
 cannot verify.
 
-### 4.4 Federation *(implemented, not yet publicly deployed)*
+### 4.4 Federation *(implemented and deployed)*
 
 The unit of authority is a **zone**. A registry is authoritative for a zone
 and may delegate branches to other registries; a resolver follows referrals
@@ -568,10 +568,11 @@ retained only for reference.
 **Deployed:** a registry with signed answers and persisted ownership; node
 agents on two hosts in separate datacenters, both verifying registry answers;
 encrypted sessions; NAT traversal; TCP tunnelling behind a port allowlist;
-and a public routing demonstration.
+a public routing demonstration; and a federated namespace — a root registry
+authoritative for `dnxroute.com` delegating `eng.dnxroute.com` to a second
+registry in another datacenter, with resolvers following the signed referral.
 
-**Built, not yet deployed:** federation, namespace paths, and the tunnel
-setup probe.
+**Built, not yet deployed:** namespace paths and the tunnel setup probe.
 
 ### 11.1 Measurements
 
@@ -583,6 +584,8 @@ All from the live deployment or its test suite; none are extrapolated.
 | Encrypted ping, warm (session reused) | ~1 ms |
 | Cloud → residential NAT, first packet (includes traversal) | 396 ms |
 | Same path, established | 49 ms |
+| Referral + NAT punch, cold (root -> child registry -> NAT'd peer) | ~455-540 ms |
+| Same referred path, established session | ~47 ms |
 | Session handshake, same host | ~2 ms |
 | Router lookup, single process | 0.03 – 1.5 µs |
 | Core table after 1001 hosts, two top-level namespaces | 2 entries |
@@ -630,6 +633,17 @@ covered by seven tests that all ran at configuration-load time and never put
 a referral on a wire. The fix makes the answering registry part of what a
 resolution returns, so a caller cannot express the wrong thing; the tests
 that now exist drive real sockets and assert where the rendezvous lands.
+
+It was also falsified against the live deployment, which is the measurement
+this section would otherwise be missing. A machine behind residential NAT was
+registered under the delegated zone and addressed from a node in another
+datacenter anchored at the root registry, so reaching it required following
+the referral *and* punching the NAT through the child. On the pre-fix binary
+the request failed with a handshake timeout; on the fixed binary, taken
+moments later against the same peer, it verified in 49 ms. The control that
+makes this conclusive ran on the pre-fix binary too: a peer in a
+non-delegated zone answered normally throughout, so what failed was not the
+node but specifically the combination of delegation and NAT.
 
 ---
 
@@ -679,9 +693,11 @@ federation imitates.
 
 ## 13. Limitations and future work
 
-**Nearest term.** Deploy federation publicly; complete the migration to
-namespace paths and retire the fixed address; build relayed fallback so peers
-behind symmetric NATs can connect.
+**Nearest term.** Complete the migration to namespace paths and retire the
+fixed address; build relayed fallback so peers behind symmetric NATs can
+connect; give a registry asked for a name outside its zone an explicit
+answer, since it currently stays silent and the resolver reports a timeout
+that reads as though the registry were unreachable.
 
 **Then.** Registry replication, so a zone is not a single machine. A backup
 and recovery story for node identity keys. Ownership proofs binding a DNX
