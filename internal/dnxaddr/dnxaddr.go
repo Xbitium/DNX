@@ -115,6 +115,18 @@ func (r *Registry) FromName(fqdn string) (Addr, error) {
 	if len(labels) < 2 {
 		return Addr{}, fmt.Errorf("name %q needs at least domain.tld", fqdn)
 	}
+	// Four fields can hold four labels and NOT ONE MORE. A deeper name used
+	// to fall through here with its middle labels simply dropped from the
+	// encoding, so two distinct names — node1.accounting.us.dnx.dnxroute.com
+	// and node1.payroll.eu.dnx.dnxroute.com — silently shared one address,
+	// and packets for either delivered to whichever registered it. Nothing
+	// errored; the encoder answered a different question than it was asked
+	// and reported success (defect 10, defect 9's shape in an encoder).
+	// Deep names belong to the namespace-path format, which handles sixteen
+	// levels; this one must refuse what it cannot represent.
+	if len(labels) > 4 {
+		return Addr{}, fmt.Errorf("name %q has %d labels but the fixed address holds only 4 tiers — deeper names need the namespace-path format", fqdn, len(labels))
+	}
 	// Reverse into big -> small so index aligns with fields.
 	n := len(labels)
 	tldLabel := labels[n-1]

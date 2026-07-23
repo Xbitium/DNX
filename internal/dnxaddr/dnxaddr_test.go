@@ -62,3 +62,39 @@ func TestUnallocatedTLDIsRejected(t *testing.T) {
 		t.Fatal("an unallocated domain should be refused")
 	}
 }
+
+// TestDeepNamesAreRefusedNotCollided is defect 10, found by asking whether
+// node1.accounting.us.east.company.com would work.
+//
+// The fixed address has four fields, and a deeper name used to fall through
+// the encoder with its middle labels simply dropped — so two DISTINCT names
+// differing only in those labels produced one identical address, no error
+// anywhere. Packets for either delivered to whichever registered first, and
+// nothing on any wire could tell them apart. An encoder must refuse what it
+// cannot represent; answering a smaller question than it was asked, with a
+// success code, is defect 9's failure shape rebuilt in an encoder (and the
+// silent-truncation family that defect 5 came from).
+func TestDeepNamesAreRefusedNotCollided(t *testing.T) {
+	reg := NewRegistry()
+
+	// The pair that demonstrated the collision on live code: identical in
+	// every label the four fields can see, distinct in the ones they can't.
+	a, errA := reg.FromName("node1.accounting.us.dnx.dnxroute.com")
+	b, errB := reg.FromName("node1.payroll.eu.dnx.dnxroute.com")
+
+	if errA == nil || errB == nil {
+		if a == b {
+			t.Fatalf("CRITICAL: two distinct 6-label names silently share the address %s", a)
+		}
+		t.Fatal("CRITICAL: a name deeper than the format's four tiers was encoded at all")
+	}
+
+	// Exactly four labels remains the format's job, and must keep working.
+	if _, err := reg.FromName("host1.dnx.dnxroute.com"); err != nil {
+		t.Fatalf("a four-label name must still encode: %v", err)
+	}
+	// Five is already one too many — the boundary itself, not just six.
+	if _, err := reg.FromName("x.y.dnx.dnxroute.com"); err == nil {
+		t.Fatal("CRITICAL: a five-label name was encoded by a four-tier format")
+	}
+}

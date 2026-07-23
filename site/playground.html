@@ -31,6 +31,8 @@
     .field .flabel{font-family:'IBM Plex Mono',monospace;font-size:1rem;color:var(--ink);margin:6px 0 4px;word-break:break-all}
     .field .fval{font-family:'IBM Plex Mono',monospace;font-size:.8rem;color:var(--accent);word-break:break-all}
     .field .forigin{font-size:.72rem;color:var(--muted);margin-top:7px}
+    .field.refused{border-top:3px solid #b4531f}
+    .field.refused .flabel{color:#b4531f}
     .addr-full{font-family:'IBM Plex Mono',monospace;font-size:.9rem;background:#0d1a17;color:#cdeadb;padding:14px;margin-top:18px;overflow-x:auto;border:1px solid #1c2f29}
 
     /* ---- namespace path levels ---- */
@@ -133,13 +135,14 @@
         <button class="preset" data-n="host1.dnxroute.com">no subdomain</button>
         <button class="preset" data-n="server.ops.disa.mil">server.ops.disa.mil</button>
         <button class="preset" data-n="host.site.nosuchtld">unallocated TLD</button>
+        <button class="preset" data-n="node1.accounting.us.east.company.com">deeper than 4 tiers</button>
       </div>
       <div id="err" class="err" hidden></div>
     </section>
 
     <section class="section" style="padding-left:0;padding-right:0">
       <h2>2 · As a fixed address <span class="muted" style="font-weight:400;font-size:.6em">— 32 bytes, the original format</span></h2>
-      <div class="prose"><p>Four 64-bit fields. The top two are <strong>assigned</strong> by a registry, which is what makes routes aggregate. The bottom two are <strong>derived</strong> from the label by hashing, so anyone can name their own hosts without asking permission. Every field is the same width whether it needs to be or not — that uniformity is what costs the bytes, and it is also what makes the format need no coordination at all: a hashed label is identical on every machine that computes it.</p></div>
+      <div class="prose"><p>Four 64-bit fields. The top two are <strong>assigned</strong> by a registry, which is what makes routes aggregate. The bottom two are <strong>derived</strong> from the label by hashing, so anyone can name their own hosts without asking permission. Every field is the same width whether it needs to be or not — that uniformity is what costs the bytes, and it is also what makes the format need no coordination at all: a hashed label is identical on every machine that computes it. And four tiers is a hard wall: a deeper name is refused outright, because until defect 10 the encoder silently dropped the labels it had no field for — two distinct deep names, one identical address, no error anywhere. Try the "deeper than 4 tiers" preset above and watch each format answer for itself.</p></div>
       <div id="fields" class="fields"></div>
       <div id="addrFull" class="addr-full"></div>
       <p class="muted" style="font-size:.85rem;margin-top:10px">Change a single character of the host label and watch the bottom field change completely — that is the avalanche property of the hash. Change the domain and only the assigned field moves.</p>
@@ -284,6 +287,16 @@ async function fromName(fqdn) {
   const labels = splitName(fqdn);
   if (labels.length < 2) throw new Error('a name needs at least domain.tld');
   const n = labels.length;
+
+  // Four fields hold four labels and NOT ONE MORE — checked before anything
+  // else, mirroring the Go encoder. Until defect 10 a deeper name fell
+  // through with its middle labels silently dropped, so two distinct names
+  // differing only in those labels encoded to one identical address with no
+  // error anywhere. This port stayed faithful to that bug until the Go side
+  // was fixed — the two implementations must agree, and this page promises
+  // it is not a mock-up.
+  if (n > 4) throw new Error(`${n} labels cannot fit the fixed address's 4 tiers — deeper names need the namespace path (which handles this one fine, below)`);
+
   const tldLabel = labels[n - 1], domLabel = labels[n - 2];
 
   if (!(tldLabel in TLD)) throw new Error(`TLD "${tldLabel}" is not allocated by the registry`);
@@ -405,9 +418,25 @@ const LEVEL_NAME = ['TLD', 'domain', 'subdomain', 'host'];
 // PART 4 — rendering
 // ===========================================================================
 let currentFormat = 'fixed';   // which encoding section 4 is walking
-let state = { addr: null, path: null };
+let state = { addr: null, path: null, addrErr: null };
 
-function renderFields(res) {
+function renderFields(res, errMsg) {
+  // The fixed address refusing a name is a rendered outcome, not a blank —
+  // this format's refusals (deep names above all) are half the story.
+  if (!res) {
+    const deep = /tiers/.test(errMsg);
+    const note = deep
+      ? 'Until defect 10 the encoder accepted names deeper than its four tiers by silently dropping the middle labels — two distinct names, one identical address, no error anywhere. It now refuses what it cannot represent.'
+      : 'The assigned tiers must come from the registry; an address cannot be derived for a name whose assigned levels it does not know.';
+    document.getElementById('fields').innerHTML = `
+    <div class="field refused" style="grid-column:1/-1">
+      <div class="fname">fixed address — refused</div>
+      <div class="flabel">${errMsg}</div>
+      <div class="forigin">${note}</div>
+    </div>`;
+    document.getElementById('addrFull').textContent = '';
+    return;
+  }
   document.getElementById('fields').innerHTML = res.fields.map(f => `
     <div class="field ${f.kind}${f.value === 0n ? ' empty' : ''}">
       <div class="fname">${f.name}</div>
@@ -418,8 +447,18 @@ function renderFields(res) {
   document.getElementById('addrFull').textContent = res.fields.map(f => hex(f.value)).join(':');
 }
 
-function renderLevels(alloc, wasKnown) {
+function renderLevels(alloc, allocErr, wasKnown, addrErr) {
   const el = document.getElementById('levels');
+
+  // The path allocator refusing (empty name, or deeper than 16) is rare
+  // but must render as an outcome, same as the fixed format's refusals.
+  if (!alloc) {
+    el.innerHTML = `<div class="level" style="flex-basis:100%"><div class="lname">namespace path — refused</div><div class="llabel">${allocErr}</div></div>`;
+    document.getElementById('saving').textContent = '';
+    document.getElementById('allocNote').textContent = '';
+    return;
+  }
+
   el.innerHTML = alloc.labels.map((label, i) => `
     <div class="level${alloc.fresh[i] ? ' fresh' : ''}">
       <div class="lname">level ${i}${LEVEL_NAME[i] ? ' · ' + LEVEL_NAME[i] : ''}</div>
@@ -428,24 +467,30 @@ function renderLevels(alloc, wasKnown) {
       <div class="lnote">${alloc.fresh[i] ? 'newly allocated — no router knows it' : 'already allocated'}</div>
     </div>`).join('');
 
-  // Size comparison. The fixed address is always 32 bytes; the path is one
-  // count byte plus four per level.
+  // Size comparison. The fixed address is always 32 bytes — when it exists
+  // at all: a name deeper than four tiers has no fixed encoding, and the
+  // bar says so instead of pricing a thing that cannot be bought.
   const pathBytes = encodedLen(alloc.path.length);
-  document.getElementById('barFixed').style.width = '100%';
+  const noFixed = !!addrErr && /tiers/.test(addrErr);
+  document.getElementById('barFixed').style.width = noFixed ? '0%' : '100%';
+  document.getElementById('amtFixed').textContent = noFixed ? 'refused' : '32 bytes';
   document.getElementById('barPath').style.width = Math.min(100, (pathBytes / 32) * 100) + '%';
-  document.getElementById('amtFixed').textContent = '32 bytes';
   document.getElementById('amtPath').textContent = pathBytes + ' bytes';
 
   const diff = 32 - pathBytes;
-  document.getElementById('saving').textContent = diff > 0
+  document.getElementById('saving').textContent = noFixed
+    ? `${pathBytes} bytes for ${alloc.path.length} levels — and no comparison to make: the fixed address cannot encode this name at all. Depth is where the two formats stop being alternatives.`
+    : diff > 0
     ? `${diff} bytes saved per packet — ${Math.round((diff / 32) * 100)}% smaller at ${alloc.path.length} levels.`
     : diff === 0
       ? 'Identical size at this depth.'
       : `${-diff} bytes larger — past seven levels the path costs more than the fixed address, which is the trade a variable-length encoding makes.`;
 
-  document.getElementById('allocNote').innerHTML = wasKnown
-    ? 'Density is not free. A hash is the same everywhere, so any machine can derive a fixed address for any name with no agreement whatsoever. A parent-scoped number is only meaningful if everyone agrees on it — and nothing distributes these yet. Today they are assigned by hand, in matching order, in every node\'s config. Section 10.3 of the whitepaper records this as an open weakness, and it is the single thing standing between the two formats and retiring the older one.'
-    : '<strong>This name has just been given identifiers that exist only in your browser.</strong> The routers below have never heard of them, so the namespace-path walk will drop the packet — while the fixed-address walk, needing no allocation at all, may still deliver it. That gap is the whole difficulty in one picture: hashing needs no coordination and wastes bytes; numbering saves bytes and needs coordination that nothing has built yet.';
+  document.getElementById('allocNote').innerHTML = noFixed
+    ? '<strong>This name exists only in the newer format.</strong> The fixed address cannot represent a fifth label, let alone a sixth — until defect 10 it pretended otherwise by silently dropping the middle labels, colliding distinct names onto one address. Deep namespaces are not where the path format is merely cheaper; they are where it is the only format there is.'
+    : wasKnown
+    ? 'Density is not free. A hash is the same everywhere, so any machine can derive a fixed address for any name with no agreement whatsoever. A parent-scoped number is only meaningful if everyone agrees on it — which is why the registry now allocates them: it already owns the namespace, so identifiers are assigned at registration, persisted beside ownership, and published under signature for routers and nodes to fetch. What still travels by hand is one prefix per delegated zone, in the same delegations file that already carries the child registry\'s key.'
+    : '<strong>This name has just been given identifiers that exist only in your browser.</strong> Nothing registered it, so no registry allocated it, and the routers below have never heard of it — the namespace-path walk will drop the packet, while the fixed-address walk, needing no allocation at all, may still deliver it. That is the trade in one picture: hashing needs no coordination and wastes bytes; numbering saves bytes and takes an authority — which is exactly what the registry became.';
 }
 
 function renderWalk() {
@@ -459,6 +504,14 @@ function renderWalk() {
         <div class="rt">no path allocated</div>
         <div class="why">No identifier has ever been issued for this name, so there is nothing to put in the packet.
         A fixed address could still have been derived by hashing — that is the asymmetry between the two formats.</div></div></div>`;
+    return;
+  }
+  if (!usingPath && !dest) {
+    document.getElementById('walk').innerHTML =
+      `<div class="hop drop"><div class="n">—</div><div class="body">
+        <div class="rt">no fixed address</div>
+        <div class="why">This format refused the name (see section 2), so there is no frame to walk.
+        Switch the toggle to <strong>namespace path</strong> — for a deep name, that is the format that can carry it.</div></div></div>`;
     return;
   }
 
@@ -494,14 +547,22 @@ function renderWalk() {
 
 function renderWire() {
   // ---- fixed frame: 0xDF marker, four fields, resolved-level counter ----
-  const bytes = state.addr.fields.map(f => hex(f.value)).join('');
-  document.getElementById('wireFixed').innerHTML =
+  const wf = document.getElementById('wireFixed');
+  if (!state.addr) {
+    const why = /tiers/.test(state.addrErr || '')
+      ? 'the encoder refused this name, so no frame exists. Until defect 10 it would have built one anyway, with the excess labels silently gone.'
+      : 'the encoder refused this name, so no frame exists.';
+    wf.innerHTML = `0xDF  <span class="c">fixed-address frame marker</span>\n<span class="c">   — ${why}</span>`;
+  } else {
+    const bytes = state.addr.fields.map(f => hex(f.value)).join('');
+    wf.innerHTML =
 `0xDF  <span class="c">fixed-address frame marker</span>
 ${bytes.match(/.{1,8}/g).join(' ')}
 <span class="c">└─ 32 bytes: the four fields above, most significant first</span>
 0x0000  <span class="c">levels already resolved — 0, this packet is new</span>
 0xD8 ...  <span class="c">the sealed payload: ChaCha20-Poly1305, opaque to every router</span>
 <span class="c">   total destination overhead: 35 bytes</span>`;
+  }
 
   // ---- path frame: 0xDE marker, count byte, one 32-bit id per level ----
   const p = state.path;
@@ -609,39 +670,41 @@ const prodTree = seededTree(PRODUCTION_NAMESPACE);
 
 async function update() {
   const el = document.getElementById('nameIn'), err = document.getElementById('err');
-  try {
-    // --- fixed address ---
-    const addr = await fromName(el.value);
-    el.classList.remove('bad'); err.hidden = true;
-    state.addr = addr;
-    renderFields(addr);
 
-    // --- namespace path: was it already allocated, or are we inventing it? ---
-    const known = resolve(prodTree, el.value);
+  // The two formats succeed or fail INDEPENDENTLY. That is not a UI nicety,
+  // it is the protocol fact this page exists to show: a six-label name is
+  // refused by the four-tier fixed address (defect 10) and perfectly served
+  // by the namespace path. One failing must not blank the other.
+
+  // --- fixed address ---
+  let addr = null, addrErr = null;
+  try { addr = await fromName(el.value); } catch (e) { addrErr = e.message; }
+
+  // --- namespace path: was it already allocated, or are we inventing it? ---
+  let alloc = null, allocErr = null, known = null;
+  try {
+    known = resolve(prodTree, el.value);
     // Allocate against a throwaway copy so typing never mutates the real tree.
     const scratch = seededTree(PRODUCTION_NAMESPACE);
-    const alloc = allocate(scratch, el.value);
-    state.path = known;                       // routers only know allocated ones
-    renderLevels(alloc, !!known);
+    alloc = allocate(scratch, el.value);
+  } catch (e) { allocErr = e.message; }
 
-    renderWalk();
-    renderWire();
-  } catch (e) {
-    el.classList.add('bad');
-    err.hidden = false;
-    err.textContent = 'cannot resolve: ' + e.message;
-    state.addr = null; state.path = null;
-    document.getElementById('fields').innerHTML = '';
-    document.getElementById('addrFull').textContent = '';
-    document.getElementById('levels').innerHTML = '';
-    document.getElementById('saving').textContent = '';
-    document.getElementById('walk').innerHTML =
-      '<div class="hop drop"><div class="n">—</div><div class="body"><div class="rt">no address</div>' +
-      '<div class="why">The registry refuses to derive an address for a name whose assigned levels it does not know. ' +
-      'Nothing can be routed, because there is nothing to route toward.</div></div></div>';
-    document.getElementById('wireFixed').textContent = '';
-    document.getElementById('wirePath').textContent = '';
-  }
+  state.addr = addr;
+  state.addrErr = addrErr;
+  state.path = known; // routers only know allocated ones
+
+  // The input goes red — and the banner appears — only when the name is
+  // unusable in BOTH formats. A name one format refuses and the other
+  // serves is not an error, it is the lesson.
+  const dead = !addr && !alloc;
+  el.classList.toggle('bad', dead);
+  err.hidden = !dead;
+  if (dead) err.textContent = 'unusable in both formats: ' + (allocErr || addrErr);
+
+  renderFields(addr, addrErr);
+  renderLevels(alloc, allocErr, !!known, addrErr);
+  renderWalk();
+  renderWire();
 }
 
 // Format toggle for the walk.

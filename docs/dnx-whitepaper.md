@@ -603,7 +603,7 @@ All from the live deployment or its test suite; none are extrapolated.
 
 ### 11.2 Method
 
-Nine substantive defects were found during development, each by asking what
+Ten substantive defects were found during development, each by asking what
 happens in a case nobody had tested, and each fix verified by first watching
 its test fail:
 
@@ -618,6 +618,8 @@ its test fail:
    had made authoritative.
 9. A request for one wire format answered in another, and reported as
    success, by a daemon too old to know the format existed.
+10. Two distinct names deeper than four labels silently encoded to one
+    identical fixed address, the labels past its four tiers dropped.
 
 Three are worth noting for how they were found. The subdomain defect surfaced
 because a second implementation, written in JavaScript for a browser
@@ -657,6 +659,8 @@ non-delegated zone answered normally throughout, so what failed was not the
 node but specifically the combination of delegation and NAT.
 
 The ninth is defect seven wearing different clothes, and it was found by deploying rather than by reading. A request to originate a packet as a namespace path was answered, by a router daemon predating that format, with a fixed address and a success reply — the format field it did not recognise simply fell through to the default. Nothing was wrong with the running system; it was doing what an older binary should do with a field it has never heard of. What was wrong was reporting that as the thing requested. Version skew is the ordinary condition of a network protocol, not an exceptional one, so an unrecognised format is now refused by name.
+
+The tenth was found by a question rather than a test: would node1.accounting.us.east.company.com work? Over namespace paths, yes — sixteen levels are allowed and every mechanism composes at depth. The fixed address, though, holds exactly four tiers, and the encoder used to let a deeper name fall through with its middle labels simply dropped: two distinct six-label names differing only in those labels produced one identical address, with no error anywhere, so packets for either delivered to whichever registered first. The encoder now refuses names deeper than its four tiers. An encoder that silently answers a smaller question than it was asked is defect nine's failure shape again — and the truncation family defect five came from — which is worth noticing: the same wrong instinct, reporting success for an approximation of the request, has now produced three separate defects in three separate components.
 
 ---
 
