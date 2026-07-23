@@ -150,11 +150,12 @@ func tunnelWaitKey(sid uint32) string { return fmt.Sprintf("TUNNEL|%d", sid) }
 // connects, so a tunnel to a port the peer refuses looks identical to a
 // working one until traffic silently fails. Better to find out now.
 func (a *agent) probeTunnel(peerName string, remotePort int, timeout time.Duration) error {
-	peerKey, peerAddr, err := a.resolve(peerName, timeout)
+	r, err := a.resolve(peerName, timeout)
 	if err != nil {
 		return fmt.Errorf("cannot resolve %s: %w", peerName, err)
 	}
-	a.intro(peerName)
+	peerKey, peerAddr := r.PeerKey, r.PeerAddr
+	a.intro(peerName, r.Registry)
 	sess, err := a.getSession(peerName, peerKey, peerAddr, timeout)
 	if err != nil {
 		return fmt.Errorf("no session with %s: %w", peerName, err)
@@ -219,13 +220,14 @@ func (a *agent) serveTunnel(peerName string, localPort, remotePort int) error {
 func (a *agent) openTunnelStream(peerName string, remotePort int, conn net.Conn) {
 	// Ensure we have a live encrypted session with the peer first — the
 	// tunnel inherits its identity guarantees from that handshake.
-	peerKey, peerAddr, err := a.resolve(peerName, 12*time.Second)
+	r, err := a.resolve(peerName, 12*time.Second)
 	if err != nil {
 		log.Printf("tunnel: cannot resolve %s: %v", peerName, err)
 		conn.Close()
 		return
 	}
-	a.intro(peerName)
+	peerKey, peerAddr := r.PeerKey, r.PeerAddr
+	a.intro(peerName, r.Registry)
 	sess, err := a.getSession(peerName, peerKey, peerAddr, 12*time.Second)
 	if err != nil {
 		log.Printf("tunnel: no session with %s: %v", peerName, err)

@@ -555,11 +555,11 @@ document.
 
 ## 11. Implementation and deployment
 
-About 5,000 lines of Go across eight library packages, plus 2,100 lines of
-tests — 75 test functions, concentrated where the consequences of being wrong
+About 5,000 lines of Go across eight library packages, plus 2,450 lines of
+tests — 81 test functions, concentrated where the consequences of being wrong
 are worst: 30 in the registry, 13 in namespace paths, 12 in the stream layer,
-7 in the session layer. Three binaries — registry, node agent, router
-daemon — plus a command-line client.
+11 in the node agent, 7 in the session layer. Three binaries — registry, node
+agent, router daemon — plus a command-line client.
 
 Three packages carry no tests of their own: `identity` and `proto` are
 exercised throughout the others, and `locator` is superseded by `nspath` and
@@ -591,7 +591,7 @@ All from the live deployment or its test suite; none are extrapolated.
 
 ### 11.2 Method
 
-Seven substantive defects were found during development, each by asking what
+Eight substantive defects were found during development, each by asking what
 happens in a case nobody had tested, and each fix verified by first watching
 its test fail:
 
@@ -602,12 +602,34 @@ its test fail:
 5. A three-label name copying its host label into its subdomain field.
 6. Impersonation via unsigned resolution answers (section 10.1).
 7. `dnx tunnel` reporting success for a tunnel the far end would refuse.
+8. Rendezvous sent to the configured registry rather than the one a referral
+   had made authoritative.
 
-Two are worth noting for how they were found. The subdomain defect surfaced
+Three are worth noting for how they were found. The subdomain defect surfaced
 because a second implementation, written in JavaScript for a browser
 playground, disagreed with the first — and the first was wrong. The
 impersonation hole surfaced from re-reading a security claim in this
 project's own documentation while preparing to build federation.
+
+The eighth is the one this section's method exists to catch, and it very
+nearly escaped. Following a referral moves authority to a child registry, but
+`intro` — the request that asks a registry to cue a peer through its NAT —
+took the configured registry unconditionally, because `resolve` never told
+its caller where the chain had ended. All three call sites therefore made the
+same mistake in the same direction: resolve through a delegation, then ask
+the root for rendezvous, of a name the root has delegated away and holds no
+endpoint for.
+
+What makes it worth recording is the shape of the failure rather than the
+fix. Two publicly-reachable peers never notice, because they do not need the
+punch; only a peer behind NAT fails, which is precisely the case DNX exists
+to serve and the one every demonstration here rests on. A defect invisible in
+the easy path and fatal in the important one is the kind that reaches
+production, and this one had: federation's referral-following code was
+covered by seven tests that all ran at configuration-load time and never put
+a referral on a wire. The fix makes the answering registry part of what a
+resolution returns, so a caller cannot express the wrong thing; the tests
+that now exist drive real sockets and assert where the rendezvous lands.
 
 ---
 

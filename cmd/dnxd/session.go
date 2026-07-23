@@ -357,14 +357,18 @@ func (a *agent) pingEncrypted(target string, timeout time.Duration) pingResult {
 	res := pingResult{Target: target, Encrypted: true}
 
 	// ---- Step 1: RESOLVE — get the peer's identity key + live endpoint ----
-	peerKey, peerAddr, err := a.resolve(target, timeout)
+	// This may follow referrals; res.Registry is wherever it ended up.
+	r, err := a.resolve(target, timeout)
 	if err != nil {
 		res.Error = err.Error()
 		return res
 	}
+	peerKey, peerAddr := r.PeerKey, r.PeerAddr
 
 	// ---- Step 2: INTRO — cue the peer to punch back (NAT traversal, v0.1) ----
-	a.intro(target)
+	// Sent to the registry that answered, which for a delegated name is not
+	// the one we were configured with.
+	a.intro(target, r.Registry)
 
 	// ---- Step 3: encrypted session (handshake if needed, else reuse) ----
 	hsStart := time.Now()
@@ -437,7 +441,26 @@ const maxReferrals = 8
 //     otherwise the referral is simply misdirection;
 //   - each hop narrows. A delegation that widened would let a registry
 //     handed one small branch seize the namespace above it.
-func (a *agent) resolve(target string, timeout time.Duration) (string, *net.UDPAddr, error) {
+//
+// resolution is everything a completed resolve() learned — including which
+// registry ended up answering.
+//
+// That last field is not bookkeeping. Following a referral moves authority to
+// a child registry, and EVERY later question about that name must go to
+// whoever ended up authoritative — above all the INTRO that opens the NAT,
+// because only the authoritative registry holds the peer's live endpoint and
+// can deliver the PUNCH cue. Returning just a key and an address made that
+// impossible for a caller to get right, so all three call sites got it wrong
+// in the same direction: they resolved through a delegation and then asked
+// the root for rendezvous. Two public peers never noticed, because they do
+// not need the punch. A peer behind NAT — the case DNX exists for — did.
+type resolution struct {
+	PeerKey  string       // identity key the authoritative registry bound to the name
+	PeerAddr *net.UDPAddr // where that peer was last observed
+	Registry *net.UDPAddr // the registry that answered; ask THIS one for rendezvous
+}
+
+func (a *agent) resolve(target string, timeout time.Duration) (*resolution, error) {
 	a.mu.Lock()
 	curAddr := a.regAddr
 	a.mu.Unlock()
@@ -450,7 +473,7 @@ func (a *agent) resolve(target string, timeout time.Duration) (string, *net.UDPA
 	for hop := 0; hop < maxReferrals; hop++ {
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
-			return "", nil, fmt.Errorf("resolve timeout after %d referral(s)", hop)
+			return nil, fmt.Errorf("resolve timeout after %d referral(s)", hop)
 		}
 
 		askedNonce := secure.NewNonce()
@@ -469,35 +492,35 @@ func (a *agent) resolve(target string, timeout time.Duration) (string, *net.UDPA
 			a.unwait(askedNonce)
 		case <-time.After(remaining):
 			a.unwait(askedNonce)
-			return "", nil, fmt.Errorf("resolve timeout (registry unreachable?)")
+			return nil, fmt.Errorf("resolve timeout (registry unreachable?)")
 		}
 
 		switch m.Kind {
 		case proto.KindError:
-			return "", nil, fmt.Errorf("%s", m.Info)
+			return nil, fmt.Errorf("%s", m.Info)
 
 		case proto.KindReferral:
 			if m.Nonce != askedNonce {
-				return "", nil, fmt.Errorf("referral does not match the question asked")
+				return nil, fmt.Errorf("referral does not match the question asked")
 			}
 			if curKey != "" {
 				if err := proto.VerifyDetached(curKey,
 					proto.ReferralBytes(target, m.Zone, m.Endpoint, m.PubKey, m.TS, m.Nonce), m.Sig); err != nil {
-					return "", nil, fmt.Errorf("referral to %q failed verification, refusing to follow it: %w", m.Zone, err)
+					return nil, fmt.Errorf("referral to %q failed verification, refusing to follow it: %w", m.Zone, err)
 				}
 			}
 			if !zone.Contains(m.Zone, target) {
-				return "", nil, fmt.Errorf("referral delegates %q, which does not contain %q", m.Zone, target)
+				return nil, fmt.Errorf("referral delegates %q, which does not contain %q", m.Zone, target)
 			}
 			if curZone != "" && !zone.IsNarrower(m.Zone, curZone) {
-				return "", nil, fmt.Errorf("referral widens authority from %q to %q, refusing", curZone, m.Zone)
+				return nil, fmt.Errorf("referral widens authority from %q to %q, refusing", curZone, m.Zone)
 			}
 			if !proto.ValidPubKey(m.PubKey) {
-				return "", nil, fmt.Errorf("referral to %q carries an invalid signing key", m.Zone)
+				return nil, fmt.Errorf("referral to %q carries an invalid signing key", m.Zone)
 			}
 			next, err := net.ResolveUDPAddr("udp", m.Endpoint)
 			if err != nil {
-				return "", nil, fmt.Errorf("referral to %q has an unusable endpoint", m.Zone)
+				return nil, fmt.Errorf("referral to %q has an unusable endpoint", m.Zone)
 			}
 			curAddr, curKey, curZone = next, m.PubKey, m.Zone
 			continue
@@ -508,30 +531,35 @@ func (a *agent) resolve(target string, timeout time.Duration) (string, *net.UDPA
 			// handshake is checked against exactly this key.
 			if curKey != "" {
 				if m.Nonce != askedNonce {
-					return "", nil, fmt.Errorf("registry answer does not match the question asked")
+					return nil, fmt.Errorf("registry answer does not match the question asked")
 				}
 				if err := proto.VerifyDetached(curKey,
 					proto.ResolveRespBytes(m.Target, m.PubKey, m.Endpoint, m.TS, m.Nonce), m.Sig); err != nil {
-					return "", nil, fmt.Errorf("registry answer failed verification, refusing to use it: %w", err)
+					return nil, fmt.Errorf("registry answer failed verification, refusing to use it: %w", err)
 				}
 			}
 			addr, err := net.ResolveUDPAddr("udp", m.Endpoint)
 			if err != nil {
-				return "", nil, fmt.Errorf("registry returned a bad endpoint")
+				return nil, fmt.Errorf("registry returned a bad endpoint")
 			}
-			return m.PubKey, addr, nil
+			return &resolution{PeerKey: m.PubKey, PeerAddr: addr, Registry: curAddr}, nil
 
 		default:
-			return "", nil, fmt.Errorf("unexpected reply %q while resolving", m.Kind)
+			return nil, fmt.Errorf("unexpected reply %q while resolving", m.Kind)
 		}
 	}
-	return "", nil, fmt.Errorf("gave up after %d referrals — delegation chain too long", maxReferrals)
+	return nil, fmt.Errorf("gave up after %d referrals — delegation chain too long", maxReferrals)
 }
 
-func (a *agent) intro(target string) {
-	a.mu.Lock()
-	reg := a.regAddr
-	a.mu.Unlock()
+// intro asks a registry to cue the peer to punch back.
+//
+// The registry is a parameter rather than a.regAddr on purpose. Rendezvous
+// only works at the registry the name actually lives under: after a referral
+// that is a child, and the configured root has delegated the branch away —
+// it holds no endpoint for the name and cannot deliver the cue. Passing it in
+// forces every caller to have resolved first, which is the only way it could
+// know the right answer.
+func (a *agent) intro(target string, reg *net.UDPAddr) {
 	m := &proto.Message{
 		Kind: proto.KindIntro, Name: a.id.Name, Target: target,
 		TS: time.Now().UnixMilli(), Nonce: secure.NewNonce(),
