@@ -124,6 +124,31 @@ func (p Path) String() string {
 	return strings.Join(parts, ".")
 }
 
+// Parse is String's inverse: "1.1.3" -> Path{1,1,3}. It is as strict as
+// Decode, and for the same reason — a misread path is a misrouted packet.
+func Parse(s string) (Path, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil, ErrEmpty
+	}
+	parts := strings.Split(s, ".")
+	if len(parts) > MaxDepth {
+		return nil, ErrTooDeep
+	}
+	p := make(Path, len(parts))
+	for i, part := range parts {
+		var n uint64
+		if _, err := fmt.Sscanf(part, "%d", &n); err != nil || fmt.Sprint(n) != part {
+			return nil, fmt.Errorf("%w: %q is not an identifier", ErrMalformed, part)
+		}
+		if n == 0 || n > 0xFFFFFFFF {
+			return nil, fmt.Errorf("%w: identifier %q out of range", ErrMalformed, part)
+		}
+		p[i] = uint32(n)
+	}
+	return p, nil
+}
+
 // Equal reports whether two paths are identical.
 func (p Path) Equal(q Path) bool {
 	if len(p) != len(q) {

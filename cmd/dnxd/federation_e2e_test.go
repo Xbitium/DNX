@@ -77,7 +77,9 @@ func newFakeRegistry(t *testing.T,
 				case fr.intros <- m.Target:
 				default:
 				}
-			case proto.KindResolve:
+			default:
+				// Everything else — RESOLVE, NAMESPACE, whatever a test
+				// invents — goes to the answer callback.
 				if reply := answer(fr, m); reply != nil {
 					conn.WriteToUDP(proto.Encode(reply), src)
 				}

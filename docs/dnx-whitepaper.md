@@ -545,7 +545,7 @@ intentions.
 | **No ownership proof** | Nothing ties a DNX name to actual control of the corresponding domain, so any unclaimed name may be registered by anyone. |
 | **No homograph policy** | Visually identical names built from different scripts are distinct names. |
 | **Identity key loss** | A node that loses its key is refused its own name until an operator releases it. There is no backup mechanism. |
-| **Namespace identifiers are not distributed** | Path identifiers are allocated monotonically per parent, so they depend on the order names are seen. Nothing hands them out: every node must be configured with the same names in the same order, and a node that disagrees forwards confidently to the wrong place. The fixed address needed no such agreement, because a hashed label is the same everywhere. |
+| **Zone identifier prefixes travel by configuration** | Leaf identifiers are now allocated by the registry and fetched, signed, by routers and nodes — configuration order no longer matters for them. What still travels by hand is one prefix per DELEGATED zone: the parent assigns it in its delegations file and the child operator copies it once, exactly as they already copy the child's endpoint and signing key. A child configured without its prefix numbers the branch differently from what the parent granted, and nothing detects that locally — the registries' published tables simply disagree. |
 | **Unaudited** | The implementation has had no external review. |
 
 This list is published because a protocol that conceals its weaknesses cannot
@@ -556,10 +556,10 @@ document.
 
 ## 11. Implementation and deployment
 
-About 5,000 lines of Go across eight library packages, plus 2,450 lines of
-tests — 81 test functions, concentrated where the consequences of being wrong
-are worst: 30 in the registry, 13 in namespace paths, 12 in the stream layer,
-11 in the node agent, 7 in the session layer. Three binaries — registry, node
+About 5,400 lines of Go across eight library packages, plus 3,100 lines of
+tests — 100 test functions, concentrated where the consequences of being
+wrong are worst: 37 in the registry, 20 in namespace paths, 16 in the node
+agent, 12 in the stream layer, 7 in the session layer. Three binaries — registry, node
 agent, router daemon — plus a command-line client.
 
 Three packages carry no tests of their own: `identity` and `proto` are
@@ -575,7 +575,11 @@ registry in another datacenter, with resolvers following the signed referral;
 and both wire formats at once — the same four routers forward a 32-byte fixed
 address and a 17-byte namespace path concurrently, with no coordinated cutover.
 
-**Built, not yet deployed:** the tunnel setup probe.
+**Built, not yet deployed:** the tunnel setup probe; and the registry as
+namespace-identifier authority — allocation on registration, persisted
+with the same care as ownership, published under signature both per-answer
+and as a fetchable table (the production routers still derive from
+configuration order until the next deployment).
 
 ### 11.1 Measurements
 
@@ -700,16 +704,7 @@ federation imitates.
 
 ## 13. Limitations and future work
 
-**Nearest term.** Make the registry allocate and publish namespace
-identifiers, which is the one thing still standing between the two wire
-formats and retiring the fixed address: the hierarchy a registry already
-delegates is exactly the hierarchy the identifiers are scoped to, so a child
-zone can number beneath itself without asking anyone. Until it does, the
-identifiers are hand-assigned in matching config order and the old format
-has to stay. Then build relayed fallback so peers behind symmetric NATs can
-connect; and give a registry asked for a name outside its zone an explicit
-answer, since it currently stays silent and the resolver reports a timeout
-that reads as though the registry were unreachable.
+**Nearest term.** Retire the fixed four-field address: with identifiers now allocated by the registry and received over signed channels, the migration's blocker is gone and what remains is converting the data plane and deleting the old encoder. Then build relayed fallback so peers behind symmetric NATs can connect; and give a registry asked for a name outside its zone an explicit answer, since it currently stays silent and the resolver reports a timeout that reads as though the registry were unreachable.
 
 **Then.** Registry replication, so a zone is not a single machine. A backup
 and recovery story for node identity keys. Ownership proofs binding a DNX

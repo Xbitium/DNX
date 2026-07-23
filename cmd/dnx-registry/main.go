@@ -63,6 +63,9 @@ type registry struct {
 	// ---- federation ----
 	zoneName    string       // what this registry is authoritative for
 	delegations []delegation // branches handled elsewhere
+
+	// ---- namespace identifiers (DNXP-0001, see nids.go) ----
+	nids *nidStore // nil disables allocation entirely
 }
 
 // delegation records that some part of this registry's namespace is handled
@@ -72,6 +75,14 @@ type delegation struct {
 	Zone     string `json:"zone"`
 	Endpoint string `json:"endpoint"`
 	KeyB64   string `json:"key"`
+
+	// Path is the namespace-identifier prefix the parent assigns to the
+	// delegated zone, dotted, root-most first ("1.1.3"). It rides in this
+	// file because the file IS the out-of-band trust channel for this
+	// delegation — the operator who copies the child's key and endpoint
+	// copies the prefix in the same motion. Optional while the migration
+	// runs: a delegation without one simply has no identifiers beneath it.
+	Path string `json:"path,omitempty"`
 }
 
 // loadDelegations reads the delegation table and refuses any entry that does
@@ -400,6 +411,10 @@ func main() {
 		"the namespace this registry is authoritative for, e.g. dnxroute.com (empty answers for anything)")
 	delegationsPath := flag.String("delegations", "",
 		"JSON file listing branches handled by other registries")
+	nidsPath := flag.String("nids", "/var/lib/dnx/registry.nids.json",
+		"where namespace-identifier allocations persist (empty disables allocation)")
+	zonePath := flag.String("zone-path", "",
+		"this registry's own namespace-identifier prefix, dotted (e.g. \"1.1.3\" for eng.dnxroute.com); required when --zone names a delegated child zone, empty for the root")
 	flag.Parse()
 
 	// Releasing a name is a file operation, not a network one — do it before
@@ -453,9 +468,42 @@ func main() {
 	for _, d := range reg.delegations {
 		log.Printf("delegated: %s -> %s (key %.12s…)", d.Zone, d.Endpoint, d.KeyB64)
 	}
+
+	// ---- namespace-identifier authority (DNXP-0001, see nids.go) ----
+	if *nidsPath != "" {
+		reg.nids, err = loadNIDStore(*nidsPath)
+		if err != nil {
+			log.Fatalf("namespace identifiers: %v", err)
+		}
+		// Our own position in the global tree comes first: allocations must
+		// never number a level that belongs to an ancestor.
+		if err := seedZonePrefix(reg.nids.tree, reg.zoneName, *zonePath); err != nil {
+			log.Fatalf("namespace identifiers: %v", err)
+		}
+		// Then the branches handed away, so nothing local ever collides
+		// with a prefix a child is allocating under.
+		if err := grantDelegationPrefixes(reg.nids.tree, reg.delegations, reg.zoneName); err != nil {
+			log.Fatalf("namespace identifiers: %v", err)
+		}
+		// Names restored from the ownership table may predate allocation
+		// entirely (the migration case). Number them now, deterministically
+		// by sorted-name order via the ownership loader below.
+		log.Printf("namespace-identifier authority enabled, table at %s", *nidsPath)
+	} else {
+		log.Printf("namespace identifiers DISABLED (--nids \"\")")
+	}
+
 	restored, err := reg.load()
 	if err != nil {
 		log.Fatalf("cannot read ownership state from %s: %v", *statePath, err)
+	}
+	if reg.nids != nil && restored > 0 {
+		// Allocate for any restored binding that lacks a path — this is the
+		// one-time migration for names that were bound before the registry
+		// became an allocator. Sorted order makes the migration itself
+		// deterministic, and after it runs once the persisted table is the
+		// authority forever after.
+		reg.allocateForRestored()
 	}
 	if *statePath == "" {
 		log.Printf("WARNING: persistence disabled — every name becomes unclaimed on restart")
@@ -504,6 +552,11 @@ func (r *registry) handle(conn *net.UDPConn, src *net.UDPAddr, m *proto.Message)
 		case bindNew:
 			log.Printf("NEW name bound: %s -> key %.12s… (at %s)", m.Name, m.PubKey, src)
 		}
+
+		// Number the name. Called on refresh as well as first bind because
+		// Allocate is idempotent for an existing name and this heals any
+		// binding that predates the allocator without a special case.
+		r.allocateFor(m.Name)
 
 		// Ack echoes back the observed endpoint — lets the node learn
 		// its own public address (STUN-lite, for free).
@@ -575,10 +628,46 @@ func (r *registry) handle(conn *net.UDPConn, src *net.UDPAddr, m *proto.Message)
 			}
 			resp.Sig = proto.SignDetached(r.signPriv,
 				proto.ResolveRespBytes(m.Target, rec.PubB64, ep, ts, m.Nonce))
+			// Attach the namespace path under its OWN signature. The main
+			// signature stays byte-identical to what pre-path agents verify
+			// (the defect-9 discipline: version skew is the ordinary
+			// condition), while anything that understands ns_path can hold
+			// it to the same standard as the key and endpoint.
+			if nsp := r.pathFor(m.Target); nsp != "" {
+				resp.NsPath = nsp
+				resp.PathSig = proto.SignDetached(r.signPriv,
+					proto.NsPathBytes(m.Target, nsp, ts, m.Nonce))
+			}
 		} else {
 			resp = errMsg("unknown or offline: " + m.Target)
 		}
 		r.mu.Unlock()
+		reply(conn, src, resp)
+
+	// ---------------- NAMESPACE: publish the allocation table ----------------
+	// A router asks for the whole table rather than deriving identifiers
+	// from configuration order — receiving beats re-deriving, because the
+	// received table cannot be assembled in the wrong order.
+	case proto.KindNamespace:
+		if r.nids == nil {
+			reply(conn, src, errMsg("this registry does not allocate namespace identifiers"))
+			return
+		}
+		table, err := json.Marshal(r.nids.tree.Walk())
+		if err != nil {
+			reply(conn, src, errMsg("cannot serialise namespace table"))
+			return
+		}
+		ts := time.Now().UnixMilli()
+		resp := &proto.Message{
+			Kind:  proto.KindNamespaceResp,
+			Zone:  r.zoneName,
+			Info:  string(table), // canonical: Walk sorts by name
+			TS:    ts,
+			Nonce: m.Nonce, // echo — an answer any question would accept is one an attacker can save
+		}
+		resp.Sig = proto.SignDetached(r.signPriv,
+			proto.NamespaceBytes(r.zoneName, string(table), ts, m.Nonce))
 		reply(conn, src, resp)
 
 	// ---------------- INTRO: rendezvous for NAT punching ----------------

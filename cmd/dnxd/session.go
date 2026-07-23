@@ -364,6 +364,7 @@ func (a *agent) pingEncrypted(target string, timeout time.Duration) pingResult {
 		return res
 	}
 	peerKey, peerAddr := r.PeerKey, r.PeerAddr
+	res.NsPath = r.NsPath // the peer's number, straight from its authority
 
 	// ---- Step 2: INTRO — cue the peer to punch back (NAT traversal, v0.1) ----
 	// Sent to the registry that answered, which for a delegated name is not
@@ -458,6 +459,14 @@ type resolution struct {
 	PeerKey  string       // identity key the authoritative registry bound to the name
 	PeerAddr *net.UDPAddr // where that peer was last observed
 	Registry *net.UDPAddr // the registry that answered; ask THIS one for rendezvous
+
+	// NsPath is the peer's namespace path as its registry allocated it
+	// ("1.1.1.2"), verified against the same trust chain as the key above,
+	// or "" when the registry does not allocate identifiers. This is how a
+	// node addresses namespace-path frames without carrying any allocation
+	// table of its own: the answer to "where is this name" now includes
+	// "and this is its number".
+	NsPath string
 }
 
 func (a *agent) resolve(target string, timeout time.Duration) (*resolution, error) {
@@ -542,7 +551,23 @@ func (a *agent) resolve(target string, timeout time.Duration) (*resolution, erro
 			if err != nil {
 				return nil, fmt.Errorf("registry returned a bad endpoint")
 			}
-			return &resolution{PeerKey: m.PubKey, PeerAddr: addr, Registry: curAddr}, nil
+			// The namespace path, if the registry allocates them. It is a
+			// routing instruction, so it is held to exactly the standard of
+			// the key and endpoint above: signed by the registry we are
+			// currently trusting, for this target, echoing this nonce — or
+			// the whole answer is refused. Accepting the answer while
+			// dropping just the path would be a silent downgrade (defect
+			// 9): the caller asked one question and would get a subtly
+			// smaller answer with no way to notice.
+			nsPath := ""
+			if m.NsPath != "" && curKey != "" {
+				if err := proto.VerifyDetached(curKey,
+					proto.NsPathBytes(m.Target, m.NsPath, m.TS, m.Nonce), m.PathSig); err != nil {
+					return nil, fmt.Errorf("namespace path in the registry answer failed verification, refusing the answer: %w", err)
+				}
+				nsPath = m.NsPath
+			}
+			return &resolution{PeerKey: m.PubKey, PeerAddr: addr, Registry: curAddr, NsPath: nsPath}, nil
 
 		default:
 			return nil, fmt.Errorf("unexpected reply %q while resolving", m.Kind)

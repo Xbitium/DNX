@@ -207,6 +207,10 @@ func main() {
 	cfgPath := flag.String("config", "node.json", "node config file")
 	listen := flag.String("listen", ":4500", "UDP listen address for routed frames")
 	telem := flag.String("telemetry", ":4600", "HTTP telemetry/dashboard API")
+	registry := flag.String("registry", "",
+		"registry to fetch the namespace-identifier table from (host:port; empty keeps config-order derivation)")
+	registryKey := flag.String("registry-key", "",
+		"base64 signing key of that registry — an unverified table is a routing plan from whoever answered fastest")
 	flag.Parse()
 
 	raw, err := os.ReadFile(*cfgPath)
@@ -225,13 +229,36 @@ func main() {
 	}
 
 	d := &daemon{cfg: cfg, conn: conn, routers: map[int]*routerCfg{}, ns: nspath.NewTree()}
-	for _, n := range cfg.Namespace {
-		p, err := d.ns.Allocate(n)
-		if err != nil {
-			log.Fatalf("namespace %q: %v", n, err)
+
+	switch {
+	case *registry != "":
+		// The authority's table, verified and grafted — identifiers are
+		// RECEIVED, so configuration order cannot matter. This is the mode
+		// that retires the hand-synchronised-namespace hazard (10.3).
+		if *registryKey == "" {
+			log.Fatalf("--registry needs --registry-key: an unverified namespace table is not a namespace table")
 		}
-		log.Printf("  namespace %s -> [%s] (%d bytes on the wire, vs 32 fixed)",
-			n, p.String(), nspath.EncodedLen(p.Depth()))
+		if err := d.syncNamespace(*registry, *registryKey); err != nil {
+			// Startup failure, not a warning: a router that starts with an
+			// empty table drops namespace-path traffic while looking
+			// healthy, and the config fallback below would derive numbers
+			// that may contradict what the authority already published.
+			log.Fatalf("namespace: %v", err)
+		}
+		go d.namespaceRefreshLoop(*registry, *registryKey, 60*time.Second)
+
+	case len(cfg.Namespace) > 0:
+		// Legacy: derive from config order. Correct only while every node's
+		// config lists the same names in the same order.
+		log.Printf("namespace derived from config order — hand-synchronised across nodes (see whitepaper 10.3); prefer --registry")
+		for _, n := range cfg.Namespace {
+			p, err := d.ns.Allocate(n)
+			if err != nil {
+				log.Fatalf("namespace %q: %v", n, err)
+			}
+			log.Printf("  namespace %s -> [%s] (%d bytes on the wire, vs 32 fixed)",
+				n, p.String(), nspath.EncodedLen(p.Depth()))
+		}
 	}
 	for i := range cfg.Routers {
 		r := &cfg.Routers[i]

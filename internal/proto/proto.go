@@ -52,6 +52,15 @@ const (
 	// A referral is a transfer of trust, so it is signed by the registry
 	// making it and may only ever narrow the zone it applies to.
 	KindReferral = "REFERRAL"
+
+	// ---- namespace identifiers (DNXP-0001) ----
+	// KindNamespace asks a registry for its allocation table; the response
+	// carries every name -> path assignment the registry has made, signed.
+	// This is how a router learns the table: it FETCHES what the authority
+	// allocated instead of re-deriving it from configuration order, which is
+	// the mechanism that retires the hand-synchronised-config hazard.
+	KindNamespace     = "NAMESPACE"
+	KindNamespaceResp = "NAMESPACE_RESP"
 )
 
 // Message is the single envelope used for ALL DNX v0.1 traffic.
@@ -74,6 +83,24 @@ type Message struct {
 
 	// ---- federation ----
 	Zone string `json:"zone,omitempty"` // the delegated zone, on a REFERRAL
+
+	// ---- namespace identifiers (DNXP-0001) ----
+	// NsPath is the dotted namespace path for Target ("1.1.1.1"), and
+	// PathSig is a SEPARATE detached signature over NsPathBytes.
+	//
+	// A separate signature, not an extension of ResolveRespBytes, is a
+	// version-skew decision (defect 9): the existing RESOLVE_RESP signature
+	// stays byte-identical, so an agent that predates namespace paths
+	// verifies exactly what it always verified and ignores the fields it
+	// does not know, while a current agent additionally demands PathSig
+	// whenever NsPath is present. Nobody's verification silently weakens.
+	//
+	// The path MUST be signed by someone: it is a routing instruction, and
+	// an unsigned one would let an on-path attacker renumber a destination
+	// while every signature on the message still checked out — the section
+	// 10.1 impersonation hole, rebuilt one field over.
+	NsPath  string `json:"ns_path,omitempty"`
+	PathSig string `json:"path_sig,omitempty"`
 }
 
 // SigningBytes returns the canonical byte string that gets signed.
@@ -132,6 +159,29 @@ func RebindBytes(name, newPubB64 string, ts int64, nonce string) []byte {
 // The nonce echoes the request, binding the answer to the question asked.
 func ResolveRespBytes(target, pubB64, endpoint string, ts int64, nonce string) []byte {
 	return []byte(fmt.Sprintf("dnx-resolveresp1|%s|%s|%s|%d|%s", target, pubB64, endpoint, ts, nonce))
+}
+
+// NsPathBytes is the canonical string signed over a single name -> path
+// assignment, carried alongside a RESOLVE_RESP.
+//
+// It binds the path to the TARGET and to the request nonce. Binding the
+// target means a valid signature for one name proves nothing about another;
+// binding the nonce means a captured assignment cannot be replayed into a
+// different conversation after the authority has moved the name.
+func NsPathBytes(target, nsPath string, ts int64, nonce string) []byte {
+	return []byte(fmt.Sprintf("dnx-nspath1|%s|%s|%d|%s", target, nsPath, ts, nonce))
+}
+
+// NamespaceBytes is the canonical string signed over a registry's ENTIRE
+// published allocation table.
+//
+// The table travels as canonical JSON (sorted by name — see nspath.Walk), so
+// two registries with identical allocations sign identical bytes. The nonce
+// echo binds the table to the question that asked for it, for the same
+// reason every other answer here echoes its nonce: an answer that any
+// question would accept is an answer an attacker can save for later.
+func NamespaceBytes(zone, tableJSON string, ts int64, nonce string) []byte {
+	return []byte(fmt.Sprintf("dnx-namespace1|%s|%s|%d|%s", zone, tableJSON, ts, nonce))
 }
 
 // ReferralBytes is the canonical string a registry signs when delegating.

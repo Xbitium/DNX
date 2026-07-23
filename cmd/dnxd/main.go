@@ -328,6 +328,7 @@ type pingResult struct {
 	Verified    bool    `json:"identity_verified"`      // key matches the registry's name binding
 	Encrypted   bool    `json:"encrypted"`              // v0.2: payload was sealed (ChaCha20-Poly1305)
 	HandshakeMs float64 `json:"handshake_ms,omitempty"` // 0 on a warm session (reused)
+	NsPath      string  `json:"ns_path,omitempty"`      // the peer's namespace path, as its registry allocated and signed it
 	Error       string  `json:"error,omitempty"`
 }
 
