@@ -556,10 +556,14 @@ document.
 
 ## 11. Implementation and deployment
 
-About 5,400 lines of Go across eight library packages, plus 3,100 lines of
-tests — 100 test functions, concentrated where the consequences of being
+About 5,300 lines of Go across seven library packages, plus 3,100 lines of
+tests — 99 test functions, concentrated where the consequences of being
 wrong are worst: 37 in the registry, 20 in namespace paths, 16 in the node
-agent, 12 in the stream layer, 7 in the session layer. Three binaries — registry, node
+agent, 12 in the stream layer, 7 in the session layer. The retirement of the
+fixed address deleted its encoder and its tests together — including the
+regression tests for defects five and ten, which died with the code they
+guarded; the defects remain in this journal, and their tests remain in the
+history. Three binaries — registry, node
 agent, router daemon — plus a command-line client.
 
 Three packages carry no tests of their own: `identity` and `proto` are
@@ -572,8 +576,15 @@ encrypted sessions; NAT traversal; TCP tunnelling behind a port allowlist;
 a public routing demonstration; and a federated namespace — a root registry
 authoritative for `dnxroute.com` delegating `eng.dnxroute.com` to a second
 registry in another datacenter, with resolvers following the signed referral;
-and both wire formats at once — the same four routers forward a 32-byte fixed
-address and a 17-byte namespace path concurrently, with no coordinated cutover.
+and a COMPLETED wire-format migration: the 32-byte fixed address and the
+namespace path ran concurrently on the same four routers, with no coordinated
+cutover; then the registry became the identifier authority, which removed the
+old format's last reason to exist; then the old format was deleted. A router
+asked today for a fixed-address frame refuses it by name, telling an old
+sender precisely what happened rather than shrugging at an unrecognised
+marker. There was never a flag day, and incremental deployability was this
+protocol's founding claim about itself — a migration begun, run in
+production, and finished is the only proof of that claim there is.
 
 **Built, not yet deployed:** the tunnel setup probe; and the routers'
 fetch-from-registry mode — the registry authority itself is live (both
@@ -710,7 +721,7 @@ federation imitates.
 
 ## 13. Limitations and future work
 
-**Nearest term.** Retire the fixed four-field address: with identifiers now allocated by the registry and received over signed channels, the migration's blocker is gone and what remains is converting the data plane and deleting the old encoder. Then build relayed fallback so peers behind symmetric NATs can connect; and give a registry asked for a name outside its zone an explicit answer, since it currently stays silent and the resolver reports a timeout that reads as though the registry were unreachable.
+**Nearest term.** Build relayed fallback so peers behind symmetric NATs can connect; and give a registry asked for a name outside its zone an explicit answer, since it currently stays silent and the resolver reports a timeout that reads as though the registry were unreachable.
 
 **Then.** Registry replication, so a zone is not a single machine. A backup
 and recovery story for node identity keys. Ownership proofs binding a DNX

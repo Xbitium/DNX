@@ -120,7 +120,7 @@
     <section class="hero" style="padding-bottom:28px">
       <p class="eyebrow">Playground</p>
       <h1>Watch a name become an address — twice.</h1>
-      <p class="lead">DNX now speaks two wire formats at the same time, and the routers running in production forward both. Type any name below and you will see it rendered as each: the original 32-byte fixed address, and the variable-length namespace path that replaces it. Everything here is computed in your browser by the same rules the implementation uses — the hashed fields are real SHA-256, truncated exactly as the Go code does it, and the path identifiers come from a faithful port of the same allocator. Nothing on this page is a mock-up.</p>
+      <p class="lead">DNX completed a wire-format migration: the original 32-byte fixed address and the namespace path ran concurrently on the production routers, then the registry became the identifier authority, and then the old format was deleted — a router asked for a fixed-address frame today refuses it by name. This page keeps both formats runnable because the migration is the story: type any name below and see it rendered as each, the retired format included. Everything here is computed in your browser by the same rules the implementation uses — the hashed fields are real SHA-256, truncated exactly as the Go code does it, and the path identifiers come from a faithful port of the same allocator. Nothing on this page is a mock-up.</p>
     </section>
 
     <section class="section" style="padding-left:0;padding-right:0">
@@ -141,8 +141,8 @@
     </section>
 
     <section class="section" style="padding-left:0;padding-right:0">
-      <h2>2 · As a fixed address <span class="muted" style="font-weight:400;font-size:.6em">— 32 bytes, the original format</span></h2>
-      <div class="prose"><p>Four 64-bit fields. The top two are <strong>assigned</strong> by a registry, which is what makes routes aggregate. The bottom two are <strong>derived</strong> from the label by hashing, so anyone can name their own hosts without asking permission. Every field is the same width whether it needs to be or not — that uniformity is what costs the bytes, and it is also what makes the format need no coordination at all: a hashed label is identical on every machine that computes it. And four tiers is a hard wall: a deeper name is refused outright, because until defect 10 the encoder silently dropped the labels it had no field for — two distinct deep names, one identical address, no error anywhere. Try the "deeper than 4 tiers" preset above and watch each format answer for itself.</p></div>
+      <h2>2 · As a fixed address <span class="muted" style="font-weight:400;font-size:.6em">— 32 bytes, the original format, now retired</span></h2>
+      <div class="prose"><p>Four 64-bit fields. The top two are <strong>assigned</strong> by a registry, which is what makes routes aggregate. The bottom two are <strong>derived</strong> from the label by hashing, so anyone can name their own hosts without asking permission. Every field is the same width whether it needs to be or not — that uniformity is what costs the bytes, and it is also what makes the format need no coordination at all: a hashed label is identical on every machine that computes it. And four tiers is a hard wall: a deeper name is refused outright, because until defect 10 the encoder silently dropped the labels it had no field for — two distinct deep names, one identical address, no error anywhere. Try the "deeper than 4 tiers" preset above and watch each format answer for itself. This format no longer exists on the wire: the production routers refuse a 0xDF frame by name, and this section is its museum exhibit — kept runnable because it is the second implementation that caught defect 5, and the one defect 10 was demonstrated against.</p></div>
       <div id="fields" class="fields"></div>
       <div id="addrFull" class="addr-full"></div>
       <p class="muted" style="font-size:.85rem;margin-top:10px">Change a single character of the host label and watch the bottom field change completely — that is the avalanche property of the hash. Change the domain and only the assigned field moves.</p>
@@ -175,10 +175,10 @@
 
     <section class="section" style="padding-left:0;padding-right:0">
       <h2>4 · Follow it through the network</h2>
-      <div class="prose"><p>This walks the destination through the same four-router topology running live on two datacenters right now. Each hop reads exactly one level and nothing else. Switch the format and watch the <em>same routers</em> forward the other encoding — that is what running both at once actually means, and why no cutover was ever needed.</p></div>
+      <div class="prose"><p>This walks the destination through the same four-router topology running live on two datacenters right now. Each hop reads exactly one level and nothing else. Switch the format and watch the <em>same routers</em> forward either encoding — which is how the migration actually ran: both formats concurrently, no cutover, until the old one had no reason left to exist and was deleted. The simulator keeps the dual walk as the record of how a wire format leaves a network without a flag day.</p></div>
 
       <div class="fmt" role="group" aria-label="Wire format">
-        <button id="fmtFixed" aria-pressed="true">fixed address</button>
+        <button id="fmtFixed" aria-pressed="true">fixed address (retired)</button>
         <button id="fmtPath" aria-pressed="false">namespace path</button>
       </div>
 

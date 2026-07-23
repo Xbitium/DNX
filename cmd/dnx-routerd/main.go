@@ -27,7 +27,6 @@ import (
 	"sync"
 	"time"
 
-	"dnx/internal/dnxaddr"
 	"dnx/internal/nspath"
 )
 
@@ -42,51 +41,22 @@ import (
 // The payload is itself a sealed ChaCha20 frame (0xD8) — routers never open it.
 // ---------------------------------------------------------------------------
 const (
-	routeMagic = 0xDF // fixed four-field address (the original format)
-	pathMagic  = 0xDE // variable-length namespace path (DNXP-0001)
+	// retiredFixedMagic marked the fixed four-field address, the original
+	// wire format. It is RETIRED: the constant survives only so a frame
+	// from an old sender is refused by name instead of shrugged off as
+	// noise — version skew is the ordinary condition of a protocol
+	// (defect 9), and a refusal that names what it refuses is the only
+	// kind an operator can act on.
+	retiredFixedMagic = 0xDF
+	pathMagic         = 0xDE // variable-length namespace path (DNXP-0001)
 )
-
-// destination is whatever a frame carries as its target. The two formats
-// differ only in how a level is read and which table answers for it; the walk
-// itself — read one level, look it up, forward, never look lower — is the
-// same, which is what makes running both at once tolerable rather than a
-// second implementation of the routing logic.
-type destination interface {
-	// keyAt returns the forwarding-table key for the given level.
-	keyAt(depth int) (string, bool)
-	// tableFor returns the table this format consults on a given router.
-	tableFor(r *routerCfg) map[string]string
-	// encode renders the frame for the next hop.
-	encode(consumed int, payload []byte) []byte
-	// format names the wire format, for telemetry.
-	format() string
-}
-
-// ---- fixed four-field address ----
-
-type fixedDest struct{ addr dnxaddr.Addr }
-
-func (d fixedDest) keyAt(depth int) (string, bool) {
-	if depth < 0 || depth > 3 {
-		return "", false
-	}
-	return hex64(d.addr.FieldAt(depth)), true
-}
-func (d fixedDest) tableFor(r *routerCfg) map[string]string { return r.Entries }
-func (d fixedDest) format() string                          { return "fixed-address" }
-func (d fixedDest) encode(consumed int, payload []byte) []byte {
-	b := make([]byte, 35+len(payload))
-	b[0] = routeMagic
-	for i := 0; i < 4; i++ {
-		binary.BigEndian.PutUint64(b[1+i*8:], d.addr.Field[i])
-	}
-	binary.BigEndian.PutUint16(b[33:], uint16(consumed))
-	copy(b[35:], payload)
-	return b
-}
 
 // ---- variable-length namespace path (DNXP-0001) ----
 
+// pathDest is a frame's destination. Until the fixed address was retired
+// this sat behind a two-implementation interface whose docstring argued the
+// two formats could share one walk; the migration completed, the argument
+// won, and the interface went with the format it existed for.
 type pathDest struct{ path nspath.Path }
 
 func (d pathDest) keyAt(depth int) (string, bool) {
@@ -111,37 +81,33 @@ func (d pathDest) encode(consumed int, payload []byte) []byte {
 	return b
 }
 
-// decodeAny parses either wire format, distinguished by the first byte.
-func decodeAny(b []byte) (destination, int, []byte, error) {
+// decode parses a namespace-path frame — the only wire format there is.
+func decode(b []byte) (pathDest, int, []byte, error) {
 	if len(b) < 1 {
-		return nil, 0, nil, fmt.Errorf("empty frame")
+		return pathDest{}, 0, nil, fmt.Errorf("empty frame")
 	}
 	switch b[0] {
-	case routeMagic:
-		if len(b) < 1+32+2 {
-			return nil, 0, nil, fmt.Errorf("truncated fixed-address frame")
-		}
-		var a dnxaddr.Addr
-		for i := 0; i < 4; i++ {
-			a.Field[i] = binary.BigEndian.Uint64(b[1+i*8:])
-		}
-		return fixedDest{addr: a}, int(binary.BigEndian.Uint16(b[33:])), b[35:], nil
+	case retiredFixedMagic:
+		// Recognised, and refused for what it is. The sender is running a
+		// binary from before the migration completed; that is a fact worth
+		// stating precisely, not a parse error.
+		return pathDest{}, 0, nil, fmt.Errorf("fixed-address frame (0xDF): that format is retired; this network forwards namespace paths only")
 
 	case pathMagic:
 		if len(b) < 2 {
-			return nil, 0, nil, fmt.Errorf("truncated path frame")
+			return pathDest{}, 0, nil, fmt.Errorf("truncated path frame")
 		}
 		p, err := nspath.Decode(b[1:])
 		if err != nil {
-			return nil, 0, nil, fmt.Errorf("path frame: %w", err)
+			return pathDest{}, 0, nil, fmt.Errorf("path frame: %w", err)
 		}
 		encLen := nspath.EncodedLen(p.Depth())
 		if len(b) < 1+encLen+2 {
-			return nil, 0, nil, fmt.Errorf("truncated path frame")
+			return pathDest{}, 0, nil, fmt.Errorf("truncated path frame")
 		}
 		return pathDest{path: p}, int(binary.BigEndian.Uint16(b[1+encLen:])), b[1+encLen+2:], nil
 	}
-	return nil, 0, nil, fmt.Errorf("unrecognised frame marker 0x%02X", b[0])
+	return pathDest{}, 0, nil, fmt.Errorf("unrecognised frame marker 0x%02X", b[0])
 }
 
 // ---------------------------------------------------------------------------
@@ -153,8 +119,6 @@ type routerCfg struct {
 	Name  string `json:"name"`
 	Depth int    `json:"depth"` // which level of the destination this router reads
 
-	// Entries answers for the fixed four-field address: hex64 value -> hop.
-	Entries map[string]string `json:"entries"`
 	// NIDs answers for a namespace path: decimal identifier -> hop.
 	// A router may serve both while the two formats run side by side.
 	NIDs map[string]string `json:"nids"`
@@ -267,7 +231,7 @@ func main() {
 
 	log.Printf("dnx-routerd up: node=%s, hosting %d router(s), listen=%s", cfg.Node, len(cfg.Routers), *listen)
 	for _, r := range cfg.Routers {
-		log.Printf("  router %q matches %s field (depth %d), %d entries", r.Name, dnxaddr.FieldName(r.Depth), r.Depth, len(r.Entries))
+		log.Printf("  router %q matches %s level (depth %d), %d route(s)", r.Name, levelName(r.Depth), r.Depth, len(r.NIDs))
 	}
 
 	go d.serveTelemetry(*telem)
@@ -283,7 +247,7 @@ func (d *daemon) readLoop() {
 		if err != nil {
 			continue
 		}
-		dest, consumed, payload, err := decodeAny(buf[:n])
+		dest, consumed, payload, err := decode(buf[:n])
 		if err != nil {
 			continue
 		}
@@ -301,7 +265,7 @@ func (d *daemon) readLoop() {
 // owns, look it up, forward. Only the lookup key and the table differ, which
 // is the whole reason both can run at once without a second copy of this
 // logic — and the reason the migration can be gradual rather than a flag day.
-func (d *daemon) route(dest destination, consumed int, payload []byte, src *net.UDPAddr) {
+func (d *daemon) route(dest pathDest, consumed int, payload []byte, src *net.UDPAddr) {
 	for {
 		r, hosted := d.routers[consumed]
 		if !hosted {
@@ -321,7 +285,7 @@ func (d *daemon) route(dest destination, consumed int, payload []byte, src *net.
 		nextLabel, known := table[key]
 		if !known {
 			d.emit(event{
-				Node: d.cfg.Node, Router: r.Name, Field: dnxaddr.FieldName(r.Depth),
+				Node: d.cfg.Node, Router: r.Name, Field: levelName(r.Depth),
 				Value: key, Action: "drop",
 				Detail: r.Name + " is authoritative for level " + strconv.Itoa(r.Depth) +
 					"; no route for " + key + " (" + dest.format() + ")",
@@ -341,7 +305,7 @@ func (d *daemon) route(dest destination, consumed int, payload []byte, src *net.
 		switch hop {
 		case ":deliver", ":local":
 			d.emit(event{
-				Node: d.cfg.Node, Router: r.Name, Field: dnxaddr.FieldName(r.Depth),
+				Node: d.cfg.Node, Router: r.Name, Field: levelName(r.Depth),
 				Value: key, NextHop: nextLabel, Action: "deliver",
 				Detail: "matched level " + strconv.Itoa(r.Depth) + " (" + dest.format() + "); delivered on " + d.cfg.Node,
 			})
@@ -354,7 +318,7 @@ func (d *daemon) route(dest destination, consumed int, payload []byte, src *net.
 				return
 			}
 			d.emit(event{
-				Node: d.cfg.Node, Router: r.Name, Field: dnxaddr.FieldName(r.Depth),
+				Node: d.cfg.Node, Router: r.Name, Field: levelName(r.Depth),
 				Value: key, NextHop: nextLabel, Action: "forward",
 				Detail: "matched level " + strconv.Itoa(r.Depth) + " (" + dest.format() + ") -> next level on same node",
 			})
@@ -362,7 +326,7 @@ func (d *daemon) route(dest destination, consumed int, payload []byte, src *net.
 
 		default:
 			d.emit(event{
-				Node: d.cfg.Node, Router: r.Name, Field: dnxaddr.FieldName(r.Depth),
+				Node: d.cfg.Node, Router: r.Name, Field: levelName(r.Depth),
 				Value: key, NextHop: nextLabel, Action: "forward",
 				Detail: "matched level " + strconv.Itoa(r.Depth) + " (" + dest.format() + ") -> " +
 					nextLabel + " @ " + hop + " (CROSS-INTERNET)",
@@ -373,7 +337,7 @@ func (d *daemon) route(dest destination, consumed int, payload []byte, src *net.
 	}
 }
 
-func (d *daemon) sendTo(hop string, dest destination, consumed int, payload []byte) {
+func (d *daemon) sendTo(hop string, dest pathDest, consumed int, payload []byte) {
 	addr, err := net.ResolveUDPAddr("udp", hop)
 	if err != nil {
 		return
@@ -445,49 +409,35 @@ func (d *daemon) serveTelemetry(listen string) {
 		// A fake sealed payload (0xD8) — routers never open it.
 		payload := append([]byte{0xD8}, []byte("sealed-demo-payload")...)
 
-		// An unrecognised format used to fall through to the fixed address,
-		// so a typo — or a caller talking to a daemon too old to know about
-		// namespace paths — silently got a 32-byte frame and a success
-		// reply. That is defect 7's lesson in a different costume: never
-		// report success for something other than what was asked for.
+		// An unrecognised format used to fall through to the fixed address
+		// (defect 9); then the formats were named; now one of them is gone.
+		// "fixed" stays recognised so the answer can say what happened to it
+		// — a vanished option reads as a typo, a retirement reads as a fact.
 		switch body.Format {
-		case "", "fixed", "path":
+		case "", "path":
+		case "fixed":
+			writeJSON(w, map[string]any{
+				"error": "the fixed-address format is retired: the registry allocates namespace identifiers now, and this network forwards paths only"})
+			return
 		default:
 			writeJSON(w, map[string]any{
-				"error": fmt.Sprintf("unknown format %q: use \"fixed\" or \"path\"", body.Format)})
+				"error": fmt.Sprintf("unknown format %q: this network forwards namespace paths (use \"path\" or omit the field)", body.Format)})
 			return
 		}
 
-		if body.Format == "path" {
-			p, err := d.ns.Resolve(body.Name)
-			if err != nil {
-				writeJSON(w, map[string]any{"error": err.Error()})
-				return
-			}
-			enc, _ := p.Encode()
-			d.emit(event{Node: d.cfg.Node, Action: "inject",
-				Detail: body.Name + " = [" + p.String() + "] via namespace path, " + strconv.Itoa(len(enc)) + " bytes",
-				Value:  p.String()})
-			d.route(pathDest{path: p}, 0, payload, nil)
-			writeJSON(w, map[string]any{
-				"injected": body.Name, "format": "namespace-path",
-				"path": p.String(), "wire_bytes": len(enc),
-			})
-			return
-		}
-
-		reg := dnxaddr.NewRegistry()
-		a, err := reg.FromName(body.Name)
+		p, err := d.ns.Resolve(body.Name)
 		if err != nil {
 			writeJSON(w, map[string]any{"error": err.Error()})
 			return
 		}
+		enc, _ := p.Encode()
 		d.emit(event{Node: d.cfg.Node, Action: "inject",
-			Detail: body.Name + " = " + a.String() + " via fixed address, 32 bytes", Value: a.String()})
-		d.route(fixedDest{addr: a}, 0, payload, nil)
+			Detail: body.Name + " = [" + p.String() + "] via namespace path, " + strconv.Itoa(len(enc)) + " bytes",
+			Value:  p.String()})
+		d.route(pathDest{path: p}, 0, payload, nil)
 		writeJSON(w, map[string]any{
-			"injected": body.Name, "format": "fixed-address",
-			"address": a.String(), "wire_bytes": 32,
+			"injected": body.Name, "format": "namespace-path",
+			"path": p.String(), "wire_bytes": len(enc),
 		})
 	}))
 
@@ -498,6 +448,23 @@ func (d *daemon) serveTelemetry(listen string) {
 
 	log.Printf("telemetry API on %s", listen)
 	http.ListenAndServe(listen, mux)
+}
+
+// levelName is the human label for a namespace depth. The first four names
+// are inherited vocabulary — the retired fixed format had exactly these four
+// tiers — and they remain the natural words for what those levels hold.
+func levelName(depth int) string {
+	switch depth {
+	case 0:
+		return "TLD"
+	case 1:
+		return "domain"
+	case 2:
+		return "subdomain"
+	case 3:
+		return "host"
+	}
+	return fmt.Sprintf("level-%d", depth)
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
